@@ -69,3 +69,9 @@ if __name__ == "__main__":
     # print(emails)
     # for email in emails:
     #     db.executar("INSERT INTO emails_rotinas (id_rotina, email) VALUES (11, :1)", [email])
+
+    SQL_ROUTINES_TO_EXECUTE = getenv("SQL_ROUTINES_TO_EXECUTE")
+    print(SQL_ROUTINES_TO_EXECUTE)
+    db = DB()
+    t = db.consultar("SELECT * FROM cadastro_rotinas WHERE id_rotina NOT IN ( SELECT id_rotina FROM cadastro_rotinas WHERE status = 'E' ) AND ativo = 'S'")
+    print(t)

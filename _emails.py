@@ -35,7 +35,7 @@ class Email:
 
         self.__msg = MIMEMultipart()
         self.__msg['Date'] = formatdate(localtime=True)
-        self.__msg['From'] = self.__USER # 'no-reply@grupomonaco.com.br'
+        self.__msg['From'] = self.__USER
 
         self.titulo = titulo
         self.anexos = anexos
