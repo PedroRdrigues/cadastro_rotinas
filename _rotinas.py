@@ -24,6 +24,21 @@ try:
 except ImportError as e:
     print("Apscheduler não instalado")
 
+# Environmental variables SQLs
+SQL_ROUTINES_TO_EXECUTE = getenv("SQL_ROUTINES_TO_EXECUTE")
+SQL_CHECK_EMAIL_SENT = getenv("SQL_CHECK_EMAIL_SENT")
+SQL_UPDATE_SET_TO_E = getenv("SQL_UPDATE_SET_TO_E")
+SQL_UPDATE_SCHEDULE_MINUTE = getenv("SQL_UPDATE_SCHEDULE_MINUTE")
+SQL_UPDATE_SCHEDULE_HOUR=getenv("SQL_UPDATE_SCHEDULE_HOUR")
+SQL_UPDATE_SCHEDULE_DAY=getenv("SQL_UPDATE_SCHEDULE_DAY")
+SQL_UPDATE_SCHEDULE_MHONTH=getenv("SQL_UPDATE_SCHEDULE_MHONTH")
+SQL_DISABLE_ROUTINE=getenv("SQL_DISABLE_ROUTINE")
+SQL_UPDATE_SET_TO_F = getenv("SQL_UPDATE_SET_TO_F")
+SQL_UPDATE_EMAIL_SENT_TO_N=getenv("SQL_UPDATE_EMAIL_SENT_TO_N")
+SQL_GET_COLUMN_NAMES=getenv("SQL_GET_COLUMN_NAMES")
+SQL_GET_RECIPIENTS=getenv("SQL_GET_RECIPIENTS")
+SQL_UPDATE_EMAIL_SENT_TO_S=getenv("SQL_UPDATE_EMAIL_SENT_TO_S")
+
 
 class Rotinas(DB):
     """
@@ -93,7 +108,6 @@ class Rotinas(DB):
         scheduler.add_job(
             self.verifica_rotinas,
             'cron',
-            minute='*/5',
             second='0',
             id='envio_rotinas',
             misfire_grace_time=10,
@@ -122,7 +136,7 @@ class Rotinas(DB):
         print(f"\n---[ Verificando _rotinas: {agora} ]---")
 
         try:
-            rows = self.consultar("SELECT * FROM cadastro_rotinas WHERE status = 'ATIVO'")
+            rows = self.consultar(SQL_ROUTINES_TO_EXECUTE)
         except Exception as e:
             print(f"Erro ao buscar _rotinas: {e}")
             raise Exception(f"Erro ao buscar _rotinas: {e}")
@@ -140,7 +154,7 @@ class Rotinas(DB):
         """
         Recebe o cadastro de uma rotina e faz a extração e tratamento dos dados.\n
         Verifica a data de agendamento e compara com a data atual para realizar a execução somente das _rotinas necessárias.\n
-        Verifica o "Tipo de Rotina", chama o método responsavel pela execução específica de cada tipo: "RELATORIO" ou "INFORMATIVO".\n
+        Verifica o "Tipo de Rotina", chama o metodo responsavel pela execução específica de cada tipo: "RELATORIO" ou "INFORMATIVO".\n
         Após a execução, verifica ser a coluna "ENVIADO" no banco de dados foi atualizada para "SIM" e atualiza a data do próximo agendamento com base na coluna "ESCALA", cado necessário.\n
         Caso o valor da coluna "ESCALA" seja "UNITARIO" é realizada a inativação da rotina.
         """
@@ -164,6 +178,11 @@ class Rotinas(DB):
             # print(f"Executando: {self.threadName}")
             # print(f"Executando: {nome}")
             try:
+                # Atualiza a coluna status para E
+                self.executar(
+                    SQL_UPDATE_SET_TO_E,
+                    [id_rotina]
+                )
                 # Execuções de relatórios.
                 if tipo == 'RELATORIO':
                     # print(f"Executando: {self.threadName} - Rolatório")
@@ -180,27 +199,33 @@ class Rotinas(DB):
                         id_rotina=id_rotina
                     )
 
+                # Atualiza a coluna status para F
+                self.executar(
+                    SQL_UPDATE_SET_TO_F,
+                    [id_rotina]
+                )
+
                 if escala != 'UNITARIO':
                     # Verifica se o e-mail foi enviado.
                     enviado = self.consultar(
-                        "SELECT enviado FROM cadastro_rotinas WHERE id_rotina = :1",
+                        SQL_CHECK_EMAIL_SENT,
                         [id_rotina]
                     )
-                    if enviado[0][0] == "SIM":
+                    if enviado[0][0] == "S":
                         # Atualiza a próxima data
                         sql_update = ""
 
                         if escala == 'MINUTO':
-                            sql_update = f"UPDATE cadastro_rotinas SET dta_proxima = :1 + numtodsinterval(:2, 'MINUTE') WHERE id_rotina = :3"
+                            sql_update = SQL_UPDATE_SCHEDULE_MINUTE
 
                         elif escala == 'HORA':
-                            sql_update = f"UPDATE cadastro_rotinas SET dta_proxima = :1 + numtodsinterval(:2, 'HOUR') WHERE id_rotina = :3"
+                            sql_update = SQL_UPDATE_SCHEDULE_HOUR
 
                         elif escala == 'DIARIO':
-                            sql_update = f"UPDATE cadastro_rotinas SET dta_proxima = :1 + :2 WHERE id_rotina = :3"
+                            sql_update = SQL_UPDATE_SCHEDULE_DAY
 
                         elif escala == 'MENSAL':
-                            sql_update = f"UPDATE cadastro_rotinas SET dta_proxima = ADD_MONTHS(:1, :2) WHERE id_rotina = :3"
+                            sql_update = SQL_UPDATE_SCHEDULE_MHONTH
 
                         if sql_update:
                             # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
@@ -208,10 +233,9 @@ class Rotinas(DB):
                             print(f"-- [ Próxima data atualizada ] ---\n")
                 else:
                     self.executar(
-                        "UPDATE cadastro_rotinas SET status = 'INATIVO' WHERE id_rotina = :1",
+                        SQL_DISABLE_ROUTINE,
                         [id_rotina]
                     )
-                    # print(nome, "inativação executada")
 
             except Exception as e:
                 print(f"ERRO na execução do executaRotina(): {e}")
@@ -221,9 +245,9 @@ class Rotinas(DB):
     def relatorio(self, sql, nome_rotina, id_rotina):
         """Execução das _rotinas do tipo: "Relatorio"."""
         try:
-           # 1. Atualiza a coluna 'ENVIADO' para 'NAO'
+           # 1. Atualiza a coluna 'ENVIADO' para 'N'
             self.executar(
-                "UPDATE cadastro_rotinas SET enviado = 'NAO' WHERE id_rotina = :1",
+                SQL_UPDATE_EMAIL_SENT_TO_N,
                 [id_rotina]
             )
             # 2. Executa verifica o nome das colunas da tabela/view dentro da query cadastrada na rotina
@@ -232,7 +256,7 @@ class Rotinas(DB):
                 else sql.split('FROM')[1].strip().split(" ")[0].split('.')[1]
 
             list_colunas = self.consultar(
-                "SELECT column_name FROM user_tab_columns WHERE table_name = :1 ORDER BY column_id",
+                SQL_GET_COLUMN_NAMES,
                 [nome_tabela]
             )
             colunas = []
@@ -259,7 +283,7 @@ class Rotinas(DB):
 
             # 4. Consulta a lista de destinatarios para onde devem ser enviados os relatórios
             destinatarios = self.consultar(
-                "SELECT email FROM emails_rotinas WHERE id_rotina = :1",
+                SQL_GET_RECIPIENTS,
                 [id_rotina]
             )
             destinatarios = [i[0] for i in destinatarios]
@@ -275,7 +299,7 @@ class Rotinas(DB):
             email.enviar()
             # 6. Atualiza a coluna 'enviado' do cadastro da rotina para 'SIM'
             self.executar(
-                "UPDATE cadastro_rotinas SET enviado = 'SIM' WHERE id_rotina = :1",
+                SQL_UPDATE_EMAIL_SENT_TO_S,
                 [id_rotina]
             )
 
@@ -314,9 +338,9 @@ class Rotinas(DB):
         EMAIL_INFORMATIVO_PASS = getenv("EMAIL_INFORMATIVO_PASS")
 
         try:
-           # 1. Atualiza a coluna 'ENVIADO' para 'NAO'
+           # 1. Atualiza a coluna 'ENVIADO' para 'N'
             self.executar(
-                "UPDATE cadastro_rotinas SET enviado = 'NAO' WHERE id_rotina = :1",
+                SQL_UPDATE_EMAIL_SENT_TO_N,
                 [id_rotina]
             )
             caminho_anexos = []
@@ -334,33 +358,29 @@ class Rotinas(DB):
 
             # 2. Consulta a lista de destinatarios para onde devem ser enviados os relatórios
             emails = self.consultar(
-                "SELECT email FROM emails_rotinas WHERE id_rotina = :1",
+                SQL_GET_RECIPIENTS,
                 [id_rotina]
             )
             emails = [i[0] for i in emails]
 
-            tamanho_chunk = 50
-            # # Divide a lista em blocos de 500 elementos
-            destinatarios = [emails[i:i + tamanho_chunk] for i in range(0, len(emails), tamanho_chunk)]
-            # 3. Faz o envio do relatório
-            for dest in destinatarios:
-                email = Email(
+            email = Email(
                 user=EMAIL_INFORMATIVO_USER,
                 password=EMAIL_INFORMATIVO_PASS,
-                cco=dest,
+                cco=emails,
                 titulo=f"Informativo - {nome_rotina}",
                 anexos=caminho_anexos,
                 corpo_arq=caminho_corpo
             )
 
-                email.enviar()
-                sleep(3)
+            email.enviar()
+            sleep(3)
 
-            # 4. Atualiza a coluna 'enviado' do cadastro da rotina para 'SIM'
+            # 4. Atualiza a coluna 'enviado' do cadastro da rotina para 'S'
             self.executar(
-                'UPDATE cadastro_rotinas SET enviado = \'SIM\' WHERE id_rotina = :1',
+                SQL_UPDATE_EMAIL_SENT_TO_S,
                 [id_rotina]
             )
+
         except Exception as e:
             print(f"ERRO na execução do informativo(): {e}")
             raise Exception(f"ERRO na execução do informativo(): {e}")
@@ -368,3 +388,9 @@ class Rotinas(DB):
 
 if __name__ == "__main__":
      print("Use o arquivo main.py!")
+     r = Rotinas()
+     t = r.consultar(SQL_ROUTINES_TO_EXECUTE)
+     print(t)
+     for i in t:
+         print(i)
+
