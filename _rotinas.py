@@ -5,7 +5,7 @@
     Também deverá atualizar a coluna DTA_PROXIMA com a data(dia/mês/ano hh:mm:ss).
 """
 
-from _db_oracle import DB
+from _databases import Oracle
 from _emails import Email
 
 from atexit import register
@@ -40,7 +40,7 @@ SQL_GET_RECIPIENTS=getenv("SQL_GET_RECIPIENTS")
 SQL_UPDATE_EMAIL_SENT_TO_S=getenv("SQL_UPDATE_EMAIL_SENT_TO_S")
 
 
-class Rotinas(DB):
+class Rotinas(Oracle):
     """
     Manipula o processo de verificação de agendamentos das _rotinas cadastradas criando uma nova Thread para cada rotina.\n
     As "voltas" de verificação das _rotinas são feitas a cada 5 min sempre no segundo .00.\n
