@@ -1,6 +1,7 @@
 """Manipulação de databese oracle com Oracledb."""
 
 from os import getenv
+from sqlite3 import connect
 
 try:
     from oracledb import create_pool
@@ -21,7 +22,7 @@ DB_PASS = getenv("ORACLE_DB_PASS")
 DB_DSN = getenv("ORACLE_DB_DSN")
 
 
-class DB:
+class Oracle:
     def __init__(self):
         # Cria o POOL de conexões apenas UMA vez na inicialização
         try:
@@ -61,6 +62,37 @@ class DB:
                 connection.commit()
 
 
+
+
+# Classe para manipular o db
+class Sqlite:
+    def __init__(self, host:str):
+        self.host = host
+        try:
+            self.conn = connect(self.host)
+            self.cursor = self.conn.cursor()
+
+        except Exception as e:
+            print(f"erro: {e}")
+
+
+    def close_db(self):  # Fechar a conexão e o cursor
+        self.conn.close()
+
+    def consultar(self, sql:str) -> list | None:
+        result = self.cursor.execute(sql)
+        dados = [i for i in result]
+        self.close_db()
+
+        return dados
+
+    def executar(self, sql:str) -> None:
+        self.cursor.execute(sql)
+        self.conn.commit()
+        self.close_db()
+
+
+
 if __name__ == "__main__":
     print(DB_USER, DB_PASS, DB_DSN)
     # db = DB()
@@ -72,6 +104,6 @@ if __name__ == "__main__":
 
     SQL_ROUTINES_TO_EXECUTE = getenv("SQL_ROUTINES_TO_EXECUTE")
     print(SQL_ROUTINES_TO_EXECUTE)
-    db = DB()
+    db = Oracle()
     t = db.consultar("SELECT * FROM cadastro_rotinas WHERE id_rotina NOT IN ( SELECT id_rotina FROM cadastro_rotinas WHERE status = 'E' ) AND ativo = 'S'")
     print(t)
