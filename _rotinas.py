@@ -32,8 +32,9 @@ SQL_UPDATE_SCHEDULE_MINUTE = getenv("SQL_UPDATE_SCHEDULE_MINUTE")
 SQL_UPDATE_SCHEDULE_HOUR=getenv("SQL_UPDATE_SCHEDULE_HOUR")
 SQL_UPDATE_SCHEDULE_DAY=getenv("SQL_UPDATE_SCHEDULE_DAY")
 SQL_UPDATE_SCHEDULE_MHONTH=getenv("SQL_UPDATE_SCHEDULE_MHONTH")
-SQL_DISABLE_ROUTINE=getenv("SQL_DISABLE_ROUTINE")
+SQL_UPDATE_DISABLE_ROUTINE=getenv("SQL_DISABLE_ROUTINE")
 SQL_UPDATE_SET_TO_F = getenv("SQL_UPDATE_SET_TO_F")
+SQL_UPDATE_SET_TO_NULL = getenv("SQL_UPDATE_SET_TO_NULL")
 SQL_UPDATE_EMAIL_SENT_TO_N=getenv("SQL_UPDATE_EMAIL_SENT_TO_N")
 SQL_GET_COLUMN_NAMES=getenv("SQL_GET_COLUMN_NAMES")
 SQL_GET_RECIPIENTS=getenv("SQL_GET_RECIPIENTS")
@@ -114,13 +115,11 @@ class Rotinas(Oracle):
             coalesce=True
         )
 
-        print(f"[{dt.now()}] APScheduler Iniciado. Aguardando agendamentos...")
-
         try:
             scheduler.start()
             sleep(1)
         except (KeyboardInterrupt, SystemExit):
-            print("---[ Serviço finalizado ]---")
+            print("\n---[ Serviço finalizado ]---")
         finally:
             if self.lock_file:
                 self.lock_file.close()
@@ -161,15 +160,16 @@ class Rotinas(Oracle):
         # Desempacotando (Garanta que a ordem das colunas no SELECT * bate com isso aqui)
         id_rotina = cadastroRotina[0]
         nome = cadastroRotina[1]
-        escala = cadastroRotina[2]
+        periodo = cadastroRotina[2]
         intervalo = cadastroRotina[3]
         dta_inicial = cadastroRotina[4]  # Oracle já retorna datetime objects
-        dta_proximaExecucao = cadastroRotina[5]
-        sql_consulta = cadastroRotina[6].upper() if cadastroRotina[6] else None
-        tipo = cadastroRotina[9]
+        dta_proxima = cadastroRotina[5]
+        dta_final = cadastroRotina[6]
+        sql_consulta = cadastroRotina[7] if cadastroRotina[7] else None
+        tipo = cadastroRotina[10]
 
         # Lógica de Data: Se dta_proxima for None, usa a inicial.
-        dta_agendada = dta_proximaExecucao if dta_proximaExecucao else dta_inicial
+        dta_agendada = dta_proxima if dta_proxima else dta_inicial
 
         agora = dt.now()
 
@@ -184,7 +184,7 @@ class Rotinas(Oracle):
                     [id_rotina]
                 )
                 # Execuções de relatórios.
-                if tipo == 'RELATORIO':
+                if tipo == 'RE':
                     # print(f"Executando: {self.threadName} - Rolatório")
                     self.relatorio(
                         sql=sql_consulta,
@@ -192,7 +192,7 @@ class Rotinas(Oracle):
                         id_rotina=id_rotina
                     )
 
-                elif tipo == 'INFORMATIVO':
+                elif tipo == 'IN':
                     # print(f"Executando: {self.threadName} - Informativo")
                     self.informativo(
                         nome_rotina=nome,
@@ -205,7 +205,7 @@ class Rotinas(Oracle):
                     [id_rotina]
                 )
 
-                if escala != 'UNITARIO':
+                if periodo != 'U' or dta_final == agora:
                     # Verifica se o e-mail foi enviado.
                     enviado = self.consultar(
                         SQL_CHECK_EMAIL_SENT,
@@ -215,35 +215,42 @@ class Rotinas(Oracle):
                         # Atualiza a próxima data
                         sql_update = ""
 
-                        if escala == 'MINUTO':
+                        if periodo == 'MI':
                             sql_update = SQL_UPDATE_SCHEDULE_MINUTE
 
-                        elif escala == 'HORA':
+                        elif periodo == 'H':
                             sql_update = SQL_UPDATE_SCHEDULE_HOUR
 
-                        elif escala == 'DIARIO':
+                        elif periodo == 'D':
                             sql_update = SQL_UPDATE_SCHEDULE_DAY
 
-                        elif escala == 'MENSAL':
+                        elif periodo == 'M':
                             sql_update = SQL_UPDATE_SCHEDULE_MHONTH
 
                         if sql_update:
                             # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
                             self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
-                            print(f"-- [ Próxima data atualizada ] ---\n")
+                            print(f"\n-- [ Próxima data atualizada ] ---\n")
                 else:
                     self.executar(
-                        SQL_DISABLE_ROUTINE,
+                        SQL_UPDATE_DISABLE_ROUTINE,
                         [id_rotina]
                     )
 
             except Exception as e:
                 print(f"ERRO na execução do executaRotina(): {e}")
+                self.executar(
+                    SQL_UPDATE_SET_TO_NULL,
+                    [id_rotina]
+                )
                 raise Exception(f"ERRO na execução do executaRotina(): {e}")
 
 
-    def relatorio(self, sql, nome_rotina, id_rotina):
+    def relatorio(self, sql:str, nome_rotina, id_rotina):
         """Execução das _rotinas do tipo: "Relatorio"."""
+        print(sql, type(sql))
+        sql = str(sql).upper()
+        print(sql, type(sql))
         try:
            # 1. Atualiza a coluna 'ENVIADO' para 'N'
             self.executar(
@@ -254,6 +261,8 @@ class Rotinas(Oracle):
             nome_tabela = sql.split('FROM')[1].strip().split(" ")[0] \
                 if len(sql.split('FROM')[1].strip().split(" ")[0].split('.')) == 1 \
                 else sql.split('FROM')[1].strip().split(" ")[0].split('.')[1]
+
+
 
             list_colunas = self.consultar(
                 SQL_GET_COLUMN_NAMES,
@@ -292,7 +301,7 @@ class Rotinas(Oracle):
             email = Email(
                 para=destinatarios,
                 titulo=nome_rotina,
-                corpo_texto=f"Olá,\n\nSegue em anexo o {nome_rotina}.",
+                # corpo_texto=f"Olá,\n\nSegue em anexo o {nome_rotina}.",
                 anexos=[caminho_arquivo]
             )
 
