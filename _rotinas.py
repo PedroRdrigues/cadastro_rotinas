@@ -248,9 +248,9 @@ class Rotinas(Oracle):
 
     def relatorio(self, sql:str, nome_rotina, id_rotina):
         """Execução das _rotinas do tipo: "Relatorio"."""
-        print(sql, type(sql))
+
         sql = str(sql).upper()
-        print(sql, type(sql))
+
         try:
            # 1. Atualiza a coluna 'ENVIADO' para 'N'
             self.executar(
