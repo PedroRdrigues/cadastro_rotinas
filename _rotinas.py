@@ -5,7 +5,7 @@
     Também deverá atualizar a coluna DTA_PROXIMA com a data(dia/mês/ano hh:mm:ss).
 """
 
-from _databases import Oracle
+from _databases import Oracle, InterfaceError
 from _emails import Email
 
 from atexit import register
@@ -14,6 +14,7 @@ from time import sleep
 from datetime import datetime as dt
 from threading import Thread
 from os import getcwd, path, mkdir, listdir, getpid, _exit, getenv
+from unicodedata import category, normalize
 
 try:
     from openpyxl import Workbook
@@ -31,8 +32,8 @@ SQL_UPDATE_SET_TO_E = getenv("SQL_UPDATE_SET_TO_E")
 SQL_UPDATE_SCHEDULE_MINUTE = getenv("SQL_UPDATE_SCHEDULE_MINUTE")
 SQL_UPDATE_SCHEDULE_HOUR=getenv("SQL_UPDATE_SCHEDULE_HOUR")
 SQL_UPDATE_SCHEDULE_DAY=getenv("SQL_UPDATE_SCHEDULE_DAY")
-SQL_UPDATE_SCHEDULE_MHONTH=getenv("SQL_UPDATE_SCHEDULE_MHONTH")
-SQL_UPDATE_DISABLE_ROUTINE=getenv("SQL_DISABLE_ROUTINE")
+SQL_UPDATE_SCHEDULE_MONTH=getenv("SQL_UPDATE_SCHEDULE_MONTH")
+SQL_UPDATE_DISABLE_ROUTINE=getenv("SQL_UPDATE_DISABLE_ROUTINE")
 SQL_UPDATE_SET_TO_F = getenv("SQL_UPDATE_SET_TO_F")
 SQL_UPDATE_SET_TO_NULL = getenv("SQL_UPDATE_SET_TO_NULL")
 SQL_UPDATE_EMAIL_SENT_TO_N=getenv("SQL_UPDATE_EMAIL_SENT_TO_N")
@@ -54,7 +55,7 @@ class Rotinas(Oracle):
         super().__init__()
 
         # Caminho para o arquivo de trava (Lock)
-        self.lock_file_path = fr"{getcwd()}\servico.lock"
+        self.lock_file_path = fr"{getcwd()}\service.lock"
         self.lock_file = None
 
         # Registra a função para fechar a trava sempre que o script encerrar
@@ -85,7 +86,7 @@ class Rotinas(Oracle):
 
                 return True
 
-            except (OSError, IOError):
+            except (OSError, IOError, Exception):
                 print(f"[{dt.now()}] ERRO: Outra instância já está em execução. Encerrando...")
 
                 if self.lock_file:
@@ -118,8 +119,9 @@ class Rotinas(Oracle):
         try:
             scheduler.start()
             sleep(1)
-        except (KeyboardInterrupt, SystemExit):
-            print("\n---[ Serviço finalizado ]---")
+        except (KeyboardInterrupt, SystemExit, InterfaceError):
+            print(f"\n---[ Serviço finalizado ]---")
+
         finally:
             if self.lock_file:
                 self.lock_file.close()
@@ -172,7 +174,6 @@ class Rotinas(Oracle):
         dta_agendada = dta_proxima if dta_proxima else dta_inicial
 
         agora = dt.now()
-
         # Verifica se já está na hora de rodar (ou se está atrasado)
         if dta_agendada and dta_agendada <= agora:
             # print(f"Executando: {self.threadName}")
@@ -205,37 +206,43 @@ class Rotinas(Oracle):
                     [id_rotina]
                 )
 
-                if periodo != 'U' or dta_final == agora:
-                    # Verifica se o e-mail foi enviado.
-                    enviado = self.consultar(
-                        SQL_CHECK_EMAIL_SENT,
-                        [id_rotina]
-                    )
-                    if enviado[0][0] == "S":
-                        # Atualiza a próxima data
-                        sql_update = ""
-
-                        if periodo == 'MI':
-                            sql_update = SQL_UPDATE_SCHEDULE_MINUTE
-
-                        elif periodo == 'H':
-                            sql_update = SQL_UPDATE_SCHEDULE_HOUR
-
-                        elif periodo == 'D':
-                            sql_update = SQL_UPDATE_SCHEDULE_DAY
-
-                        elif periodo == 'M':
-                            sql_update = SQL_UPDATE_SCHEDULE_MHONTH
-
-                        if sql_update:
-                            # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
-                            self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
-                            print(f"\n-- [ Próxima data atualizada ] ---\n")
-                else:
+                if dta_final != None and dta_final <= agora:
                     self.executar(
                         SQL_UPDATE_DISABLE_ROUTINE,
                         [id_rotina]
                     )
+                else:
+                    if periodo != 'U' :
+                        # Verifica se o e-mail foi enviado.
+                        enviado = self.consultar(
+                            SQL_CHECK_EMAIL_SENT,
+                            [id_rotina]
+                        )
+                        if enviado[0][0] == "S":
+                            # Atualiza a próxima data
+                            sql_update = ""
+
+                            if periodo == 'MI':
+                                sql_update = SQL_UPDATE_SCHEDULE_MINUTE
+
+                            elif periodo == 'H':
+                                sql_update = SQL_UPDATE_SCHEDULE_HOUR
+
+                            elif periodo == 'D':
+                                sql_update = SQL_UPDATE_SCHEDULE_DAY
+
+                            elif periodo == 'M':
+                                sql_update = SQL_UPDATE_SCHEDULE_MONTH
+
+                            if sql_update:
+                                # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
+                                self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
+                                print(f"\n-- [ Próxima data atualizada ] ---\n")
+                    else:
+                        self.executar(
+                            SQL_UPDATE_DISABLE_ROUTINE,
+                            [id_rotina]
+                        )
 
             except Exception as e:
                 print(f"ERRO na execução do executaRotina(): {e}")
@@ -311,7 +318,7 @@ class Rotinas(Oracle):
                 SQL_UPDATE_EMAIL_SENT_TO_S,
                 [id_rotina]
             )
-
+            print(f"---[ {nome_rotina} executada ]---")
         except Exception as e:
             print(f"ERRO na execução do relatorio(): {e}")
             raise Exception(f"ERRO na execução do relatorio(): {e}")
@@ -333,7 +340,10 @@ class Rotinas(Oracle):
         if not path.exists(f'{getcwd()}/planilhas'):
             mkdir(f'{getcwd()}/planilhas')
 
-        caminho_arquivo = fr'{getcwd()}/planilhas/{nome_rotina}.xlsx'
+        nome_arq = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace(' ', '_')) if category(c) != 'Mn')
+
+        caminho_arquivo = fr'{getcwd()}/planilhas/{nome_arq}.xlsx'
+
 
         workbook.save(caminho_arquivo)
         sleep(1)
@@ -354,6 +364,7 @@ class Rotinas(Oracle):
             )
             caminho_anexos = []
             caminho_corpo = []
+            # nome_dir = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace('-', "").replace(' ', '_')) if category(c) != 'Mn')
 
             if path.exists(f"{getcwd()}/informativo/anexos/{nome_rotina}"):
                 caminho_anexo = f"{getcwd()}/informativo/anexos/{nome_rotina}"
@@ -396,10 +407,4 @@ class Rotinas(Oracle):
 
 
 if __name__ == "__main__":
-     print("Use o arquivo main.py!")
-     r = Rotinas()
-     t = r.consultar(SQL_ROUTINES_TO_EXECUTE)
-     print(t)
-     for i in t:
-         print(i)
-
+    print("Use o arquivo main!")
