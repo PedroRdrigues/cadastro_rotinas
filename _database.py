@@ -1,7 +1,6 @@
 """Manipulação de databese oracle com Oracledb."""
 
 from os import getenv
-from sqlite3 import connect
 
 try:
     from oracledb import create_pool, InterfaceError
@@ -17,12 +16,12 @@ except ImportError as e:
 
 
 # Configurações do Banco (Coloque as suas credenciais aqui)
-DB_USER = getenv("ORACLE_DB_USER")
-DB_PASS = getenv("ORACLE_DB_PASS")
-DB_DSN = getenv("ORACLE_DB_DSN")
+DB_USER = getenv("DB_USER")
+DB_PASS = getenv("DB_PASS")
+DB_DSN = getenv("DB_DSN")
 
 
-class Oracle:
+class DB:
     def __init__(self):
         # Cria o POOL de conexões apenas UMA vez na inicialização
         try:
@@ -60,34 +59,3 @@ class Oracle:
                 else:
                     cursor.execute(sql)
                 connection.commit()
-
-
-
-
-# Classe para manipular o db
-class Sqlite:
-    def __init__(self, host:str):
-        self.host = host
-        try:
-            self.conn = connect(self.host)
-            self.cursor = self.conn.cursor()
-
-        except Exception as e:
-            print(f"erro: {e}")
-
-
-    def close_db(self):  # Fechar a conexão e o cursor
-        self.conn.close()
-
-    def consultar(self, sql:str) -> list | None:
-        result = self.cursor.execute(sql)
-        dados = [i for i in result]
-        self.close_db()
-
-        return dados
-
-    def executar(self, sql:str) -> None:
-        self.cursor.execute(sql)
-        self.conn.commit()
-        self.close_db()
-

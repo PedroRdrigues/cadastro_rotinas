@@ -5,7 +5,7 @@
     Também deverá atualizar a coluna DTA_PROXIMA com a data(dia/mês/ano hh:mm:ss).
 """
 
-from _databases import Oracle, InterfaceError
+from _database import DB, InterfaceError
 from _emails import Email
 
 from atexit import register
@@ -28,21 +28,19 @@ except ImportError as e:
 # Environmental variables SQLs
 SQL_ROUTINES_TO_EXECUTE = getenv("SQL_ROUTINES_TO_EXECUTE")
 SQL_CHECK_EMAIL_SENT = getenv("SQL_CHECK_EMAIL_SENT")
-SQL_UPDATE_SET_TO_E = getenv("SQL_UPDATE_SET_TO_E")
+SQL_UPDATE_SET_TO_E_N = getenv("SQL_UPDATE_SET_TO_E_N")
 SQL_UPDATE_SCHEDULE_MINUTE = getenv("SQL_UPDATE_SCHEDULE_MINUTE")
 SQL_UPDATE_SCHEDULE_HOUR=getenv("SQL_UPDATE_SCHEDULE_HOUR")
 SQL_UPDATE_SCHEDULE_DAY=getenv("SQL_UPDATE_SCHEDULE_DAY")
 SQL_UPDATE_SCHEDULE_MONTH=getenv("SQL_UPDATE_SCHEDULE_MONTH")
 SQL_UPDATE_DISABLE_ROUTINE=getenv("SQL_UPDATE_DISABLE_ROUTINE")
-SQL_UPDATE_SET_TO_F = getenv("SQL_UPDATE_SET_TO_F")
+SQL_UPDATE_SET_TO_F_S = getenv("SQL_UPDATE_SET_TO_F_S")
 SQL_UPDATE_SET_TO_NULL = getenv("SQL_UPDATE_SET_TO_NULL")
-SQL_UPDATE_EMAIL_SENT_TO_N=getenv("SQL_UPDATE_EMAIL_SENT_TO_N")
 SQL_GET_COLUMN_NAMES=getenv("SQL_GET_COLUMN_NAMES")
 SQL_GET_RECIPIENTS=getenv("SQL_GET_RECIPIENTS")
-SQL_UPDATE_EMAIL_SENT_TO_S=getenv("SQL_UPDATE_EMAIL_SENT_TO_S")
 
 
-class Rotinas(Oracle):
+class Rotinas(DB):
     """
     Manipula o processo de verificação de agendamentos das _rotinas cadastradas criando uma nova Thread para cada rotina.\n
     As "voltas" de verificação das _rotinas são feitas a cada 5 min sempre no segundo .00.\n
@@ -134,7 +132,7 @@ class Rotinas(Oracle):
         """
         # ATENÇÃO: A data atual deve ser pega AGORA, não no __init__
         agora = dt.now()
-        print(f"\n---[ Verificando _rotinas: {agora} ]---")
+        print(f"\n---[ Verificando rotinas: {agora} ]---")
 
         try:
             rows = self.consultar(SQL_ROUTINES_TO_EXECUTE)
@@ -167,7 +165,7 @@ class Rotinas(Oracle):
         dta_inicial = cadastroRotina[4]  # Oracle já retorna datetime objects
         dta_proxima = cadastroRotina[5]
         dta_final = cadastroRotina[6]
-        sql_consulta = cadastroRotina[7] if cadastroRotina[7] else None
+        sql_consulta = str(cadastroRotina[7]).upper() if cadastroRotina[7] else None
         tipo = cadastroRotina[10]
 
         # Lógica de Data: Se dta_proxima for None, usa a inicial.
@@ -179,11 +177,12 @@ class Rotinas(Oracle):
             # print(f"Executando: {self.threadName}")
             # print(f"Executando: {nome}")
             try:
-                # Atualiza a coluna status para E
+                # Atualiza a coluna status para E e atualiza a coluna 'ENVIADO' para 'N'
                 self.executar(
-                    SQL_UPDATE_SET_TO_E,
+                    SQL_UPDATE_SET_TO_E_N,
                     [id_rotina]
                 )
+
                 # Execuções de relatórios.
                 if tipo == 'RE':
                     # print(f"Executando: {self.threadName} - Rolatório")
@@ -199,50 +198,60 @@ class Rotinas(Oracle):
                         nome_rotina=nome,
                         id_rotina=id_rotina
                     )
-
-                # Atualiza a coluna status para F
+                elif tipo == 'TRG':
+                    self.trigger(
+                        sql=sql_consulta,
+                        nome_rotina=nome,
+                        id_rotina=id_rotina
+                    )
+                # Atualiza a coluna 'enviado' do cadastro da rotina para 'SIM' e atualiza a coluna status para F
                 self.executar(
-                    SQL_UPDATE_SET_TO_F,
+                    SQL_UPDATE_SET_TO_F_S,
                     [id_rotina]
                 )
+                print(f"---[ {nome} executada ]---")
 
-                if dta_final != None and dta_final <= agora:
-                    self.executar(
-                        SQL_UPDATE_DISABLE_ROUTINE,
-                        [id_rotina]
-                    )
-                else:
-                    if periodo != 'U' :
-                        # Verifica se o e-mail foi enviado.
-                        enviado = self.consultar(
-                            SQL_CHECK_EMAIL_SENT,
-                            [id_rotina]
-                        )
-                        if enviado[0][0] == "S":
-                            # Atualiza a próxima data
-                            sql_update = ""
-
-                            if periodo == 'MI':
-                                sql_update = SQL_UPDATE_SCHEDULE_MINUTE
-
-                            elif periodo == 'H':
-                                sql_update = SQL_UPDATE_SCHEDULE_HOUR
-
-                            elif periodo == 'D':
-                                sql_update = SQL_UPDATE_SCHEDULE_DAY
-
-                            elif periodo == 'M':
-                                sql_update = SQL_UPDATE_SCHEDULE_MONTH
-
-                            if sql_update:
-                                # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
-                                self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
-                                print(f"\n-- [ Próxima data atualizada ] ---\n")
-                    else:
+                try:
+                    if dta_final != None and dta_final <= agora:
                         self.executar(
                             SQL_UPDATE_DISABLE_ROUTINE,
                             [id_rotina]
                         )
+                    else:
+                        if periodo != 'U' :
+                            # Verifica se o e-mail foi enviado.
+                            enviado = self.consultar(
+                                SQL_CHECK_EMAIL_SENT,
+                                [id_rotina]
+                            )
+                            if enviado[0][0] == "S":
+                                # Atualiza a próxima data
+                                sql_update = ""
+
+                                if periodo == 'Mi': # Atualiza com Minutos
+                                    sql_update = SQL_UPDATE_SCHEDULE_MINUTE
+
+                                elif periodo == 'H': # Atualiza com Horas
+                                    sql_update = SQL_UPDATE_SCHEDULE_HOUR
+
+                                elif periodo == 'D': # Atualiza com Dias
+                                    sql_update = SQL_UPDATE_SCHEDULE_DAY
+
+                                elif periodo == 'M': # Atualiza com Meses
+                                    sql_update = SQL_UPDATE_SCHEDULE_MONTH
+
+                                if sql_update:
+                                    # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
+                                    self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
+                                    print(f"\n-- [ Próxima data atualizada ] ---\n")
+                        else:
+                            self.executar(
+                                SQL_UPDATE_DISABLE_ROUTINE,
+                                [id_rotina]
+                            )
+                except Exception as e:
+                    print(f"Erro na atualização da próxima data de execução.\n{e}")
+                    raise Exception(f"Erro na atualização da próxima data de execução.\n{e}")
 
             except Exception as e:
                 print(f"ERRO na execução do executaRotina(): {e}")
@@ -255,16 +264,8 @@ class Rotinas(Oracle):
 
     def relatorio(self, sql:str, nome_rotina, id_rotina):
         """Execução das _rotinas do tipo: "Relatorio"."""
-
-        sql = str(sql).upper()
-
         try:
-           # 1. Atualiza a coluna 'ENVIADO' para 'N'
-            self.executar(
-                SQL_UPDATE_EMAIL_SENT_TO_N,
-                [id_rotina]
-            )
-            # 2. Executa verifica o nome das colunas da tabela/view dentro da query cadastrada na rotina
+            # 1. Executa verifica o nome das colunas da tabela/view dentro da consulta cadastrada na rotina
             nome_tabela = sql.split('FROM')[1].strip().split(" ")[0] \
                 if len(sql.split('FROM')[1].strip().split(" ")[0].split('.')) == 1 \
                 else sql.split('FROM')[1].strip().split(" ")[0].split('.')[1]
@@ -279,7 +280,7 @@ class Rotinas(Oracle):
             for coluna in list_colunas:
                 colunas.append(coluna[0])
 
-            # 2. Executa a query da rotina
+            # 2. Executa a consulta da rotina
             retorno = self.consultar(sql)
 
             # 2.1 Verificar se existe algum valor de data e converter para o formato de data padão
@@ -288,7 +289,11 @@ class Rotinas(Oracle):
 
                 for i, v in enumerate(valorCelula):
                     if isinstance(v, dt):
-                        retorno[index][i] = v.strftime("%d/%m/%Y %H:%M:%S")
+                        print(v.strftime('%H:%M:%S') == "00:00:00")
+                        if v.strftime('%H:%M:%S') == "00:00:00":
+                            retorno[index][i] = v.strftime("%d/%m/%Y")
+                        else:
+                            retorno[index][i] = v.strftime("%d/%m/%Y %H:%M:%S")
 
             # 3. Usa o retorno e cria uma tabela em formato Excel(.xlsx)
             caminho_arquivo = self.criaExcel(
@@ -308,17 +313,12 @@ class Rotinas(Oracle):
             email = Email(
                 para=destinatarios,
                 titulo=nome_rotina,
-                # corpo_texto=f"Olá,\n\nSegue em anexo o {nome_rotina}.",
+                corpo_texto=f"Olá,\n\nSegue em anexo o relatório conforme solicitado.",
                 anexos=[caminho_arquivo]
             )
 
             email.enviar()
-            # 6. Atualiza a coluna 'enviado' do cadastro da rotina para 'SIM'
-            self.executar(
-                SQL_UPDATE_EMAIL_SENT_TO_S,
-                [id_rotina]
-            )
-            print(f"---[ {nome_rotina} executada ]---")
+
         except Exception as e:
             print(f"ERRO na execução do relatorio(): {e}")
             raise Exception(f"ERRO na execução do relatorio(): {e}")
@@ -326,44 +326,42 @@ class Rotinas(Oracle):
 
     def criaExcel(self, colunas, conteundo, nome_rotina):
         """Cria uma planilha Excel e armazena dentro do diretório "Planilhas"."""
-        # Cria um arquivo .xlsx vazio
-        workbook = Workbook()
-        # Cria a página ativa do arquivo
-        sheet = workbook.active
-        # Adiciona o nome das colunas na página ativa
-        sheet.append(colunas)
+        try:
+            # Cria um arquivo .xlsx vazio
+            workbook = Workbook()
+            # Cria a página ativa do arquivo
+            sheet = workbook.active
+            # Adiciona o nome das colunas na página ativa
+            sheet.append(colunas)
 
-        # Adiciona o conteúdo na página ativa
-        for row in conteundo:
-            sheet.append(row)
+            # Adiciona o conteúdo na página ativa
+            for row in conteundo:
+                sheet.append(row)
 
-        if not path.exists(f'{getcwd()}/planilhas'):
-            mkdir(f'{getcwd()}/planilhas')
+            if not path.exists(f'{getcwd()}/planilhas'):
+                mkdir(f'{getcwd()}/planilhas')
 
-        nome_arq = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace(' ', '_')) if category(c) != 'Mn')
+            nome_arq = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace(' ', '_')) if category(c) != 'Mn')
 
-        caminho_arquivo = fr'{getcwd()}/planilhas/{nome_arq}.xlsx'
+            caminho_arquivo = fr'{getcwd()}/planilhas/{nome_arq}.xlsx'
 
 
-        workbook.save(caminho_arquivo)
-        sleep(1)
+            workbook.save(caminho_arquivo)
+            sleep(1)
 
-        return caminho_arquivo
-
+            return caminho_arquivo
+        except Exception as e:
+            print(f"Erro ao criar arquivo Excel: {e}")
+            raise Exception(f"Erro ao criar arquivo Excel: {e}")
 
     def informativo(self, nome_rotina,  id_rotina):
         """Execução das _rotinas do tipo: "Informativo"."""
         EMAIL_INFORMATIVO_USER = getenv("EMAIL_INFORMATIVO_USER")
         EMAIL_INFORMATIVO_PASS = getenv("EMAIL_INFORMATIVO_PASS")
+        caminho_anexos = []
+        caminho_corpo = []
 
         try:
-           # 1. Atualiza a coluna 'ENVIADO' para 'N'
-            self.executar(
-                SQL_UPDATE_EMAIL_SENT_TO_N,
-                [id_rotina]
-            )
-            caminho_anexos = []
-            caminho_corpo = []
             # nome_dir = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace('-', "").replace(' ', '_')) if category(c) != 'Mn')
 
             if path.exists(f"{getcwd()}/informativo/anexos/{nome_rotina}"):
@@ -395,15 +393,19 @@ class Rotinas(Oracle):
             email.enviar()
             sleep(3)
 
-            # 4. Atualiza a coluna 'enviado' do cadastro da rotina para 'S'
-            self.executar(
-                SQL_UPDATE_EMAIL_SENT_TO_S,
-                [id_rotina]
-            )
-
         except Exception as e:
             print(f"ERRO na execução do informativo(): {e}")
             raise Exception(f"ERRO na execução do informativo(): {e}")
+
+
+    def trigger(self, sql:str, nome_rotina, id_rotina):
+        try:
+            print("TRIGGER")
+        except Exception as e:
+            print(f"Erro na execução da trigger(): {e}")
+            raise Exception(f"Erro na execução da trigger(): {e}")
+
+
 
 
 if __name__ == "__main__":
