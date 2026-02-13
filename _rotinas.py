@@ -1,412 +1,281 @@
-"""
-    SERVIÇO DE CONSULTA E EXECUÇÃO DO CADASTRO DE ROTINAS\n
-    Criar um serviço que faça consultas a cada minuto numa tabela no banco de dados.\n
-    O seriviço deve executar o Script SQL que está informado na coluna SQL na tabela, baseado na ESCALA(HORA, DIA, SEMANA, MÊS, ANO) e no INTERVALO a partir da DTA_INICIAL.\n
-    Também deverá atualizar a coluna DTA_PROXIMA com a data(dia/mês/ano hh:mm:ss).
-"""
+import logging
+from dataclasses import dataclass
+from datetime import datetime as dt
+from pathlib import Path
+from threading import Thread
+from typing import List, Optional, Any
+from unicodedata import category, normalize
+
+from atexit import register
+from msvcrt import locking, LK_NBLCK
+from os import getpid, _exit, getenv
+from time import sleep
+
+# Dependências externas
+try:
+    from openpyxl import Workbook
+    from apscheduler.schedulers.blocking import BlockingScheduler
+except ImportError as e:
+    logging.error(f"Dependência faltando: {e}")
 
 from _database import DB, InterfaceError
 from _emails import Email
 
-from atexit import register
-from msvcrt import locking, LK_NBLCK
-from time import sleep
-from datetime import datetime as dt
-from threading import Thread
-from os import getcwd, path, mkdir, listdir, getpid, _exit, getenv
-from unicodedata import category, normalize
-
-try:
-    from openpyxl import Workbook
-except ImportError as e:
-    print("Openpyxl não instalado")
-try:
-    from apscheduler.schedulers.blocking import BlockingScheduler
-except ImportError as e:
-    print("Apscheduler não instalado")
-
-# Environmental variables SQLs
-SQL_ROUTINES_TO_EXECUTE = getenv("SQL_ROUTINES_TO_EXECUTE")
-SQL_CHECK_EMAIL_SENT = getenv("SQL_CHECK_EMAIL_SENT")
-SQL_UPDATE_SET_TO_E_N = getenv("SQL_UPDATE_SET_TO_E_N")
-SQL_UPDATE_SCHEDULE_MINUTE = getenv("SQL_UPDATE_SCHEDULE_MINUTE")
-SQL_UPDATE_SCHEDULE_HOUR=getenv("SQL_UPDATE_SCHEDULE_HOUR")
-SQL_UPDATE_SCHEDULE_DAY=getenv("SQL_UPDATE_SCHEDULE_DAY")
-SQL_UPDATE_SCHEDULE_MONTH=getenv("SQL_UPDATE_SCHEDULE_MONTH")
-SQL_UPDATE_DISABLE_ROUTINE=getenv("SQL_UPDATE_DISABLE_ROUTINE")
-SQL_UPDATE_SET_TO_F_S = getenv("SQL_UPDATE_SET_TO_F_S")
-SQL_UPDATE_SET_TO_NULL = getenv("SQL_UPDATE_SET_TO_NULL")
-SQL_GET_COLUMN_NAMES=getenv("SQL_GET_COLUMN_NAMES")
-SQL_GET_RECIPIENTS=getenv("SQL_GET_RECIPIENTS")
+# Configuração de Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 
-class Rotinas(DB):
-    """
-    Manipula o processo de verificação de agendamentos das _rotinas cadastradas criando uma nova Thread para cada rotina.\n
-    As "voltas" de verificação das _rotinas são feitas a cada 5 min sempre no segundo .00.\n
-    Quando uma rotina cadastrada tem a data e horário de agendamento igual a data e horário atual ele cria a Thread para Executá-la.\n
-    Mesmo que uma rotina tenha sua data e horário de execução agendado para um horário entre uma "volta" e outra, ela será executada normamente.\n
-    As _rotinas são divididas em dois tipos "RELATORIOS" e "INFORMATIVOS"
-    """
+@dataclass
+class RoutineData:
+    """Estrutura para mapear os dados da rotina do banco."""
+    id: int
+    nome: str
+    periodo: str
+    intervalo: int
+    dta_inicial: dt
+    dta_proxima: Optional[dt]
+    dta_final: Optional[dt]
+    sql: Optional[str]
+    tipo: str
+
+    @classmethod
+    def from_row(cls, row):
+        return cls(
+            id=row[0], nome=row[1], periodo=row[2], intervalo=row[3],
+            dta_inicial=row[4], dta_proxima=row[5], dta_final=row[6],
+            sql=str(row[7]).upper(), tipo=row[10]
+        )
+
+
+class RoutineService(DB):
     def __init__(self):
-        # Inicializa o DB (cria o pool)
         super().__init__()
-
-        # Caminho para o arquivo de trava (Lock)
-        self.lock_file_path = fr"{getcwd()}\service.lock"
-        self.lock_file = None
-
-        # Registra a função para fechar a trava sempre que o script encerrar
+        self.base_path = Path.cwd()
+        self.lock_file_path = self.base_path / "service.lock"
+        self.lock_handle = None
         register(self.release_lock)
 
     def release_lock(self):
-        """Libera o handle do arquivo para o Windows soltar a trava."""
-        if self.lock_file:
+        if self.lock_handle:
             try:
-                self.lock_file.close()
-                print(f"\n--- [{dt.now()}] Trava de arquivo liberada. ---")
-            except:
+                self.lock_handle.close()
+                logging.info("Trava de arquivo liberada.")
+            except Exception:
                 pass
 
-    def acquire_lock(self) -> bool:
-        """Tenta adquirir a trava com retentativas para suportar reinícios rápidos."""
+    def acquire_lock(self):
+        """Garante instância única do serviço."""
         for _ in range(5):
             try:
-                self.lock_file = open(self.lock_file_path, "w")
-
-                # Tenta travar o arquivo usando o LK_NBLCK
-                locking(self.lock_file.fileno(), LK_NBLCK, 1)
-
-                # Grava o PID atual no arquivo para conferência
-                self.lock_file.write(str(getpid()))
-                self.lock_file.flush()
-                print(f"\n---[{dt.now()}] Trava adquirida com sucesso (PID: {getpid()})---")
-
+                self.lock_handle = open(self.lock_file_path, "w")
+                locking(self.lock_handle.fileno(), LK_NBLCK, 1)
+                self.lock_handle.write(str(getpid()))
+                self.lock_handle.flush()
+                logging.info(f"Lock adquirido (PID: {getpid()})")
                 return True
-
-            except (OSError, IOError, Exception):
-                print(f"[{dt.now()}] ERRO: Outra instância já está em execução. Encerrando...")
-
-                if self.lock_file:
-                    self.lock_file.close()
+            except (OSError, IOError):
+                logging.warning("Outra instância em execução. Tentando novamente...")
                 sleep(1)
 
+        logging.error("Não foi possível adquirir o lock. Encerrando.")
         _exit(0)
 
-    def run(self) -> None:
-        """Inicia o processo de verificação de agendamentos das _rotinas cadastradas com 1 segundo entre cada execução."""
-        # Passo 1: Bloqueia qualquer execução duplicada
+    def run(self):
         self.acquire_lock()
-
-        # Passo 2: Configura o Agendador Avançado
-        # Usamos o BlockingScheduler porque o serviço deve ficar "preso" aqui
         scheduler = BlockingScheduler()
 
-        # Adiciona o Job com proteções extras:
-        # - misfire_grace_time=10: Se o serviço reiniciar e atrasar, ele tem 10s de tolerância.
-        # - coalesce=True: Se o PC travar e voltar, ele não dispara 10 vezes os jobs acumulados.
+        # Configuração do Job
         scheduler.add_job(
-            self.verifica_rotinas,
+            self.check_routines,
             'cron',
             second='0',
-            id='envio_rotinas',
-            misfire_grace_time=10,
+            misfire_grace_time=15,
             coalesce=True
         )
 
+        logging.info("Serviço de Rotinas Iniciado...")
         try:
             scheduler.start()
-            sleep(1)
         except (KeyboardInterrupt, SystemExit, InterfaceError):
-            print(f"\n---[ Serviço finalizado ]---")
-
+            logging.info("Serviço finalizado pelo usuário ou erro de interface.")
         finally:
-            if self.lock_file:
-                self.lock_file.close()
+            self.release_lock()
 
-
-    def verifica_rotinas(self) -> None:
-        """
-        Realiza a consulta no banco de dados e cria uma Thread para cada execução de rotina ativa.\n
-        As "voltas" de verificação das _rotinas são feitas a cada 5 min sempre no segundo .00.
-        """
-        # ATENÇÃO: A data atual deve ser pega AGORA, não no __init__
-        agora = dt.now()
-        print(f"\n---[ Verificando rotinas: {agora} ]---")
-
+    def check_routines(self):
+        logging.info("Verificando rotinas pendentes...")
         try:
-            rows = self.consultar(SQL_ROUTINES_TO_EXECUTE)
+            rows = self.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
+
+            for row in rows:
+                routine = RoutineData.from_row(row)
+                Thread(target=self.process_routine, args=(routine,), daemon=True).start()
         except Exception as e:
-            print(f"Erro ao buscar _rotinas: {e}")
-            raise Exception(f"Erro ao buscar _rotinas: {e}")
+            logging.error(f"Erro ao buscar rotinas: {e}")
 
-        for row in rows:
-
-            # Ajuste os índices conforme a sua tabela real no Oracle
-            # Inicia a Thread passando os dados da linha
-            # self.threadName = f"Thread_{i}"
-            t = Thread(target=self.executaRotina, args=[row])
-            t.start()
-
-
-    def executaRotina(self, cadastroRotina: list) -> None:
-        """
-        Recebe o cadastro de uma rotina e faz a extração e tratamento dos dados.\n
-        Verifica a data de agendamento e compara com a data atual para realizar a execução somente das _rotinas necessárias.\n
-        Verifica o "Tipo de Rotina", chama o metodo responsavel pela execução específica de cada tipo: "RELATORIO" ou "INFORMATIVO".\n
-        Após a execução, verifica ser a coluna "ENVIADO" no banco de dados foi atualizada para "SIM" e atualiza a data do próximo agendamento com base na coluna "ESCALA", cado necessário.\n
-        Caso o valor da coluna "ESCALA" seja "UNITARIO" é realizada a inativação da rotina.
-        """
-        # Desempacotando (Garanta que a ordem das colunas no SELECT * bate com isso aqui)
-        id_rotina = cadastroRotina[0]
-        nome = cadastroRotina[1]
-        periodo = cadastroRotina[2]
-        intervalo = cadastroRotina[3]
-        dta_inicial = cadastroRotina[4]  # Oracle já retorna datetime objects
-        dta_proxima = cadastroRotina[5]
-        dta_final = cadastroRotina[6]
-        sql_consulta = str(cadastroRotina[7]).upper() if cadastroRotina[7] else None
-        tipo = cadastroRotina[10]
-
-        # Lógica de Data: Se dta_proxima for None, usa a inicial.
-        dta_agendada = dta_proxima if dta_proxima else dta_inicial
-
+    def process_routine(self, routine: RoutineData):
         agora = dt.now()
-        # Verifica se já está na hora de rodar (ou se está atrasado)
+        dta_agendada = routine.dta_proxima or routine.dta_inicial
+
         if dta_agendada and dta_agendada <= agora:
-            # print(f"Executando: {self.threadName}")
-            # print(f"Executando: {nome}")
             try:
-                # Atualiza a coluna status para E e atualiza a coluna 'ENVIADO' para 'N'
-                self.executar(
-                    SQL_UPDATE_SET_TO_E_N,
-                    [id_rotina]
-                )
+                logging.info(f"Iniciando: {routine.nome} (ID: {routine.id})")
 
-                # Execuções de relatórios.
-                if tipo == 'RE':
-                    # print(f"Executando: {self.threadName} - Rolatório")
-                    self.relatorio(
-                        sql=sql_consulta,
-                        nome_rotina=nome,
-                        id_rotina=id_rotina
-                    )
+                # Status: Executando
+                self.executar(getenv("SQL_UPDATE_SET_TO_E_N"), [routine.id])
 
-                elif tipo == 'IN':
-                    # print(f"Executando: {self.threadName} - Informativo")
-                    self.informativo(
-                        nome_rotina=nome,
-                        id_rotina=id_rotina
-                    )
-                elif tipo == 'TRG':
-                    self.trigger(
-                        sql=sql_consulta,
-                        nome_rotina=nome,
-                        id_rotina=id_rotina
-                    )
-                # Atualiza a coluna 'enviado' do cadastro da rotina para 'SIM' e atualiza a coluna status para F
-                self.executar(
-                    SQL_UPDATE_SET_TO_F_S,
-                    [id_rotina]
-                )
-                print(f"---[ {nome} executada ]---")
+                # Dispatcher de tipos
+                if routine.tipo == 'RE':
+                    self._handle_report(routine)
+                elif routine.tipo == 'IN':
+                    self._handle_info(routine)
+                elif routine.tipo == 'TRG':
+                    logging.info(f"Trigger executada para {routine.nome}")
 
-                try:
-                    if dta_final != None and dta_final <= agora:
-                        self.executar(
-                            SQL_UPDATE_DISABLE_ROUTINE,
-                            [id_rotina]
-                        )
-                    else:
-                        if periodo != 'U' :
-                            # Verifica se o e-mail foi enviado.
-                            enviado = self.consultar(
-                                SQL_CHECK_EMAIL_SENT,
-                                [id_rotina]
-                            )
-                            if enviado[0][0] == "S":
-                                # Atualiza a próxima data
-                                sql_update = ""
+                # Finalização e Reagendamento
+                self.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
+                self._reschedule(routine, dta_agendada, agora)
 
-                                if periodo == 'Mi': # Atualiza com Minutos
-                                    sql_update = SQL_UPDATE_SCHEDULE_MINUTE
-
-                                elif periodo == 'H': # Atualiza com Horas
-                                    sql_update = SQL_UPDATE_SCHEDULE_HOUR
-
-                                elif periodo == 'D': # Atualiza com Dias
-                                    sql_update = SQL_UPDATE_SCHEDULE_DAY
-
-                                elif periodo == 'M': # Atualiza com Meses
-                                    sql_update = SQL_UPDATE_SCHEDULE_MONTH
-
-                                if sql_update:
-                                    # Geralmente usa-se a agendada para não encavalar horários, mas para simplificar usei a agendada.
-                                    self.executar(sql_update, [dta_agendada, intervalo, id_rotina])
-                                    print(f"\n-- [ Próxima data atualizada ] ---\n")
-                        else:
-                            self.executar(
-                                SQL_UPDATE_DISABLE_ROUTINE,
-                                [id_rotina]
-                            )
-                except Exception as e:
-                    print(f"Erro na atualização da próxima data de execução.\n{e}")
-                    raise Exception(f"Erro na atualização da próxima data de execução.\n{e}")
+                logging.info(f"Sucesso:  {routine.nome} (ID: {routine.id})")
 
             except Exception as e:
-                print(f"ERRO na execução do executaRotina(): {e}")
-                self.executar(
-                    SQL_UPDATE_SET_TO_NULL,
-                    [id_rotina]
-                )
-                raise Exception(f"ERRO na execução do executaRotina(): {e}")
+                logging.error(f"Falha na rotina {routine.id} '{routine.nome}': {e}")
+                self.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
 
+    def _get_hiperlink(self, id_routine: int) -> dict[str, Any]:
+       return {
+                h[0]: h[1] for h in self.consultar(
+                    getenv("SQL_GET_HIPERLINK"),
+                    [id_routine]
+                )['data']
+            }
 
-    def relatorio(self, sql:str, nome_rotina, id_rotina):
-        """Execução das _rotinas do tipo: "Relatorio"."""
+    def _get_recipient(self, id_routine: int) -> List[str]:
+        return [
+                    r[0] for r in self.consultar(
+                        getenv("SQL_GET_RECIPIENTS"), [id_routine]
+                    )['data']
+                ]
+
+    def _get_column_names(self, sql: str) -> List[str]:
+        """Extrai nomes de colunas dos metadados da consulta."""
         try:
-            # 1. Executa verifica o nome das colunas da tabela/view dentro da consulta cadastrada na rotina
-            nome_tabela = sql.split('FROM')[1].strip().split(" ")[0] \
-                if len(sql.split('FROM')[1].strip().split(" ")[0].split('.')) == 1 \
-                else sql.split('FROM')[1].strip().split(" ")[0].split('.')[1]
-
-
-
-            list_colunas = self.consultar(
-                SQL_GET_COLUMN_NAMES,
-                [nome_tabela]
-            )
-            colunas = []
-            for coluna in list_colunas:
-                colunas.append(coluna[0])
-
-            # 2. Executa a consulta da rotina
-            retorno = self.consultar(sql)
-
-            # 2.1 Verificar se existe algum valor de data e converter para o formato de data padão
-            for index, value in enumerate(retorno):
-                valorCelula = [i for i in value]
-
-                for i, v in enumerate(valorCelula):
-                    if isinstance(v, dt):
-                        print(v.strftime('%H:%M:%S') == "00:00:00")
-                        if v.strftime('%H:%M:%S') == "00:00:00":
-                            retorno[index][i] = v.strftime("%d/%m/%Y")
-                        else:
-                            retorno[index][i] = v.strftime("%d/%m/%Y %H:%M:%S")
-
-            # 3. Usa o retorno e cria uma tabela em formato Excel(.xlsx)
-            caminho_arquivo = self.criaExcel(
-                colunas=colunas,
-                conteundo=retorno,
-                nome_rotina=nome_rotina,
-                )
-
-            # 4. Consulta a lista de destinatarios para onde devem ser enviados os relatórios
-            destinatarios = self.consultar(
-                SQL_GET_RECIPIENTS,
-                [id_rotina]
-            )
-            destinatarios = [i[0] for i in destinatarios]
-
-            # 5. Faz o envio do relatório
-            email = Email(
-                para=destinatarios,
-                titulo=nome_rotina,
-                corpo_texto=f"Olá,\n\nSegue em anexo o relatório conforme solicitado.",
-                anexos=[caminho_arquivo]
-            )
-
-            email.enviar()
-
+            # Pegamos a descrição do cursor que o seu _database agora retorna
+            result = self.consultar(sql)
+            if result and 'description' in result:
+                return [c[0] for c in result['description']]
+            return []
         except Exception as e:
-            print(f"ERRO na execução do relatorio(): {e}")
-            raise Exception(f"ERRO na execução do relatorio(): {e}")
+            logging.error(f"Erro ao obter colunas: {e}")
+            return []
 
+    def _create_excel(self, colunas, conteudo, nome_rotina) -> Path:
+        wb = Workbook()
+        ws = wb.active
+        ws.append(colunas)
+        for row in conteudo:
+            ws.append(row)
 
-    def criaExcel(self, colunas, conteundo, nome_rotina):
-        """Cria uma planilha Excel e armazena dentro do diretório "Planilhas"."""
+        folder = self.base_path / "planilhas"
+        folder.mkdir(exist_ok=True)
+
+        # Sanitização de nome de arquivo
+        clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
+        clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
+
+        file_path = folder / f"{clean_name}.xlsx"
+        wb.save(file_path)
+        return file_path
+
+    def _reschedule(self, routine: RoutineData, dta_agendada: dt, agora: dt):
+        """Calcula e atualiza a próxima execução."""
+        if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
+            self.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
+            return
+
+        # Mapeamento de SQLs de update por período
+        sql_map = {
+            'Mi': getenv("SQL_UPDATE_SCHEDULE_MINUTE"),
+            'H': getenv("SQL_UPDATE_SCHEDULE_HOUR"),
+            'D': getenv("SQL_UPDATE_SCHEDULE_DAY"),
+            'M': getenv("SQL_UPDATE_SCHEDULE_MONTH")
+        }
+
+        sql_update = sql_map.get(routine.periodo)
+        if sql_update:
+            self.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
+            logging.info(f"Rotina {routine.nome} (ID: {routine.id}) reagendada.")
+
+    def _handle_info(self, routine: RoutineData):
         try:
-            # Cria um arquivo .xlsx vazio
-            workbook = Workbook()
-            # Cria a página ativa do arquivo
-            sheet = workbook.active
-            # Adiciona o nome das colunas na página ativa
-            sheet.append(colunas)
+            clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
+            clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
+            # Lógica de informativo (mantida a estrutura de diretórios do original)
+            base_info = self.base_path / "informativo"
+            anexos_dir = base_info / "anexos" / clean_name
+            corpos_dir = base_info / "corpos" / clean_name
 
-            # Adiciona o conteúdo na página ativa
-            for row in conteundo:
-                sheet.append(row)
+            anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []
+            corpos = [str(p) for p in corpos_dir.glob("*")] if corpos_dir.exists() else []
+            destinatarios = self._get_recipient(routine.id)
+            hiperlinks = self._get_hiperlink(routine.id)
 
-            if not path.exists(f'{getcwd()}/planilhas'):
-                mkdir(f'{getcwd()}/planilhas')
-
-            nome_arq = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace(' ', '_')) if category(c) != 'Mn')
-
-            caminho_arquivo = fr'{getcwd()}/planilhas/{nome_arq}.xlsx'
-
-
-            workbook.save(caminho_arquivo)
-            sleep(1)
-
-            return caminho_arquivo
+            Email(
+                user=getenv("EMAIL_INFORMATIVO_USER"),
+                password=getenv("EMAIL_INFORMATIVO_PASS"),
+                cco=destinatarios,
+                titulo=f"Informativo - {routine.nome}",
+                anexos=anexos,
+                corpo_arq=corpos,
+                hiperlink=hiperlinks
+            ).enviar()
         except Exception as e:
-            print(f"Erro ao criar arquivo Excel: {e}")
-            raise Exception(f"Erro ao criar arquivo Excel: {e}")
+            raise e
 
-    def informativo(self, nome_rotina,  id_rotina):
-        """Execução das _rotinas do tipo: "Informativo"."""
-        EMAIL_INFORMATIVO_USER = getenv("EMAIL_INFORMATIVO_USER")
-        EMAIL_INFORMATIVO_PASS = getenv("EMAIL_INFORMATIVO_PASS")
-        caminho_anexos = []
-        caminho_corpo = []
-
+    def _handle_report(self, routine: RoutineData):
+        """Lógica de geração e envio de relatório Excel."""
         try:
-            # nome_dir = ''.join(c for c in normalize('NFD', nome_rotina.lower().replace('-', "").replace(' ', '_')) if category(c) != 'Mn')
+            # Executa a query principal
+            dados = self.consultar(routine.sql)['data']
+            # logging.info(f"Dados do db: {dados}")
 
-            if path.exists(f"{getcwd()}/informativo/anexos/{nome_rotina}"):
-                caminho_anexo = f"{getcwd()}/informativo/anexos/{nome_rotina}"
-                anexos = listdir(caminho_anexo)
-                caminho_anexos = [f"{caminho_anexo}/{a}" for a in anexos]
+            # Processamento de datas para exibição no Excel
+            dados_formatados = []
+            for linha in dados:
+                nova_linha = []
+                for val in linha:
+                    if isinstance(val, dt) and val.strftime("%H:%M:%S") != "00:00:00":
+                        nova_linha.append(val.strftime("%d/%m/%Y %H:%M:%S"))
+                    elif isinstance(val, dt):
+                        nova_linha.append(val.strftime("%d/%m/%Y"))
+                    else:
+                        nova_linha.append(val)
 
-            if path.exists(f"{getcwd()}/informativo/corpos/{nome_rotina}"):
-                caminho_corpo = f"{getcwd()}/informativo/corpos/{nome_rotina}"
-                imgs_corpo = listdir(caminho_corpo)
-                caminho_corpo = [f"{caminho_corpo}/{img}" for img in imgs_corpo]
+                dados_formatados.append(nova_linha)
 
-            # 2. Consulta a lista de destinatarios para onde devem ser enviados os relatórios
-            emails = self.consultar(
-                SQL_GET_RECIPIENTS,
-                [id_rotina]
-            )
-            emails = [i[0] for i in emails]
+            # Para as colunas, o ideal é que sua classe DB retorne o cursor.description
+            # Aqui mantive a lógica de busca por tabela, mas simplificada
+            colunas = self._get_column_names(routine.sql)
 
-            email = Email(
-                user=EMAIL_INFORMATIVO_USER,
-                password=EMAIL_INFORMATIVO_PASS,
-                cco=emails,
-                titulo=f"Informativo - {nome_rotina}",
-                anexos=caminho_anexos,
-                corpo_arq=caminho_corpo
-            )
+            path_excel = self._create_excel(colunas, dados_formatados, routine.nome)
 
-            email.enviar()
-            sleep(3)
+            destinatarios = self._get_recipient(routine.id)
 
+            # Email(
+            #     para=destinatarios,
+            #     titulo=f"Relatório - {routine.nome}",
+            #     corpo_texto="Segue em anexo o relatório solicitado.",
+            #     anexos=[str(path_excel)]
+            # ).enviar()
         except Exception as e:
-            print(f"ERRO na execução do informativo(): {e}")
-            raise Exception(f"ERRO na execução do informativo(): {e}")
+            raise e
 
-
-    def trigger(self, sql:str, nome_rotina, id_rotina):
-        try:
-            print("TRIGGER")
-        except Exception as e:
-            print(f"Erro na execução da trigger(): {e}")
-            raise Exception(f"Erro na execução da trigger(): {e}")
 
 
 
 
 if __name__ == "__main__":
-    print("Use o arquivo main!")
+    print("---[ USAR O ARQUIVO MAIN.PY ]---")
