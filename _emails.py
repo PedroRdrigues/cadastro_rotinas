@@ -1,148 +1,143 @@
-from smtplib import SMTP_SSL
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+"""Módulo de envio de e-mails via SMTP_SSL com suporte a imagens inline (cid)."""
+
+import logging
+import smtplib
+from base64 import b64encode
+from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.utils import formatdate
-from email import encoders
-from base64 import b64encode
-from os import path, getenv
+from os import getenv
+from pathlib import Path
 from time import sleep
+from typing import List, Optional, Any
 
+# Carregamento de variáveis de ambiente
 try:
     from dotenv import load_dotenv
     load_dotenv()
-except ImportError as e:
-    print("dotenv não Instalado.")
-
-
-EMAIL_DEFAULT_USER = getenv("EMAIL_DEFAULT_USER")
-EMAIL_DEFAULT_PASSWORD = getenv("EMAIL_DEFAULT_PASSWORD")
-EMAIL_HOST = getenv("EMAIL_HOST")
-EMAIL_PORT = int(getenv("EMAIL_PORT"))
-
+except ImportError:
+    logging.warning("dotenv não instalado. Usando variáveis de ambiente do sistema.")
 
 
 class Email:
     def __init__(
-            self, user:str=EMAIL_DEFAULT_USER, password:str=EMAIL_DEFAULT_PASSWORD,
-            para:list=None, cco:list=None, anexos:list=None, titulo:str=None, corpo_texto:str=None, corpo_arq:list=None
-        ):
-        self.__HOST = EMAIL_HOST
-        self.__PORT = EMAIL_PORT
-        self.__USER = user
-        self.__PASSWORD = password
-
-        self.__msg = MIMEMultipart()
-        self.__msg['Date'] = formatdate(localtime=True)
-        self.__msg['From'] = self.__USER
-
-        self.titulo = titulo
-        self.anexos = anexos
-        self.corpo_texto = corpo_texto
-        self.corpo_arq = corpo_arq
+        self,
+        user: str = getenv("EMAIL_DEFAULT_USER"),
+        password: str = getenv("EMAIL_DEFAULT_PASSWORD"),
+        para: Optional[List[str]] = None,
+        cco: Optional[List[str]] = None,
+        anexos: Optional[List[str]] = None,
+        titulo: str = "Sem Assunto",
+        corpo_texto: Optional[str] = None,
+        corpo_arq: Optional[List[str]] = None,
+        hiperlink: Optional[dict[str, Any]] = None
+    ):
+        self._host = getenv("EMAIL_HOST")
+        self._port = int(getenv("EMAIL_PORT") or 465)
+        self._user = user
+        self._password = password
 
         if not para and not cco:
-            raise Exception("Nenhum destinatário informado.")
-        else:
-            self.para = para
-            self.cco = cco
+            raise ValueError("É necessário informar ao menos um destinatário (para ou cco).")
 
-        self.__mensagem()
+        self.para = para or []
+        self.cco = cco or []
+        self.titulo = titulo
+        self.anexos = anexos or []
+        self.corpo_texto = corpo_texto
+        self.corpo_arq = corpo_arq or []
+        self.hiperlink = hiperlink or {}
 
+        # Objeto da mensagem
+        self.msg = MIMEMultipart()
+        self._montar_cabecalho()
+        self._montar_corpo()
 
-    # 1. Criando a mensagem
-    def __mensagem(self):
+    def _montar_cabecalho(self):
+        """Preenche os metadados do e-mail."""
+        self.msg['Date'] = formatdate(localtime=True)
+        self.msg['From'] = self._user
+        self.msg['Subject'] = self.titulo
+        self.msg['To'] = ", ".join(self.para)
+        if self.cco:
+            self.msg['Bcc'] = ", ".join(self.cco)
+
+    def _montar_corpo(self):
+        """Processa anexos, textos e imagens inline (informativos)."""
         try:
-            if self.para:
-                self.para = ', '.join(self.para) if len(self.para) > 1 else self.para[0]
+            # 1. Anexos de Arquivos (Excel, etc)
+            for caminho in self.anexos:
+                path_anexo = Path(caminho)
+                if path_anexo.exists():
+                    with open(path_anexo, 'rb') as f:
+                        part = MIMEBase('application', 'octet-stream')
+                        part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header('Content-Disposition', f'attachment; filename={path_anexo.name}')
+                    self.msg.attach(part)
 
-            if self.cco:
-                self.cco = ', '.join(self.cco) if len(self.cco) > 1 else self.cco[0]
-
-
-            self.__msg['Subject'] = self.titulo
-            self.__msg['To'] = self.para
-            self.__msg['Bcc'] = self.cco
-
-
-            # 1.1. Adicionando o Anexo
-            if self.anexos:
-                for anexo in self.anexos:
-                    if path.exists(anexo):
-                        with open(anexo, 'rb') as anx:
-                            part = MIMEBase('application', 'octet-stream')
-                            part.set_payload(anx.read())
-
-                        encoders.encode_base64(part)
-                        part.add_header('Content-Disposition', f'attachment; filename={path.basename(anexo)}')
-                        self.__msg.attach(part)
-
+            # 2. Corpo de Texto Simples
             if self.corpo_texto:
-                self.__msg.attach(MIMEText(self.corpo_texto, _subtype='plain'))
+                self.msg.attach(MIMEText(self.corpo_texto, 'plain'))
 
+            # 3. Informativos (Imagens Inline)
             elif self.corpo_arq:
-                # 2. Criar o corpo HTML com a imagem vinculada (cid)
-                html = f"""<html><body>"""
-                for i in range(len(self.corpo_arq)):
-                    html += f"""<img src="cid:image{i}" alt="Imagem {i}"><br>"""
+                print('corpo_arq',self.corpo_arq)
+                html = "<html><body>"
 
-                html += """</body></html>"""
+                for i, path_img in enumerate(self.corpo_arq):
+                    link = self.hiperlink[Path(path_img).name]
+                    if link:
+                        html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
+                    else:
+                        html += f'<img src="cid:image{i}" alt="Imagem {i}"><br>'
 
-                msg_text = MIMEText(html, 'html')
-                self.__msg.attach(msg_text)
-
-                for i, c in enumerate(self.corpo_arq):
-                    # 3. Carregar a imagem e adicionar o Content-ID
-                    with open(c, 'rb') as img:
-                        msg_image = MIMEImage(img.read())
-                        # O Content-ID precisa corresponder ao cid no HTML (image1)
-                        msg_image.add_header('Content-ID', f'<image{i}>')
-                        msg_image.add_header('Content-Disposition', 'inline', filename=path.basename(c))
-                        self.__msg.attach(msg_image)
+                html += "</body></html>"
+                self.msg.attach(MIMEText(html, 'html'))
+                for i, img_path in enumerate(self.corpo_arq):
+                    path_img = Path(img_path)
+                    if path_img.exists():
+                        with open(path_img, 'rb') as f:
+                            mime_img = MIMEImage(f.read())
+                            mime_img.add_header('Content-ID', f'<image{i}>')
+                            mime_img.add_header('Content-Disposition', 'inline', filename=path_img.name)
+                            self.msg.attach(mime_img)
 
         except Exception as e:
-            print(f"Erro ao criar a mensagem: {e}")
-            raise Exception(f"Erro ao criar a mensagem: {e}")
+            logging.error(f"Erro ao montar estrutura do e-mail: {e}")
+            raise
 
-
-    # 2. Enviando (Usando SMTP_SSL para a porta 465)
-    def enviar(self):
+    def enviar(self) -> bool:
+        """Realiza a autenticação manual e envia o e-mail."""
         try:
-            # 1. Preparar Usuário e Senha em Base64 (Strings ASCII limpas)
-            user_b64 = b64encode(self.__USER.encode('utf-8')).decode('ascii')
-            pass_b64 = b64encode(self.__PASSWORD.encode('utf-8')).decode('ascii')
+            # Codificação para AUTH LOGIN
+            user_b64 = b64encode(self._user.encode('utf-8')).decode('ascii')
+            pass_b64 = b64encode(self._password.encode('utf-8')).decode('ascii')
 
-            with SMTP_SSL(self.__HOST, self.__PORT) as server:
-                # server.set_debuglevel(1)
-
-                # 2. Iniciar o protocolo manualmente
+            with smtplib.SMTP_SSL(self._host, self._port) as server:
                 server.ehlo()
 
-                # 3. Comando AUTH LOGIN: O servidor responde 334 avisando que está pronto para o usuário
+                # Autenticação manual via comandos SMTP
                 code, resp = server.docmd("AUTH", "LOGIN")
                 if code != 334:
-                    raise Exception(f"Servidor não suporta AUTH LOGIN: {code} {resp}")
+                    raise PermissionError(f"Servidor recusou AUTH LOGIN: {resp}")
 
-                # 4. Envia o Usuário em Base64
-                code, resp = server.docmd(user_b64)
-                if code != 334:
-                    raise Exception(f"Erro no envio do usuário: {code} {resp}")
-
-                # 5. Envia a Senha em Base64
+                server.docmd(user_b64)
                 code, resp = server.docmd(pass_b64)
-                if code != 235:  # 235 é o código de sucesso para Autenticação
-                    raise Exception(f"Erro na senha (provavelmente recusada): {code} {resp}")
 
-                print("---[ Autenticado com sucesso! ]---")
+                if code != 235:
+                    raise PermissionError(f"Autenticação recusada: {resp}")
 
-                # 6. Enviar o e-mail
-                server.send_message(self.__msg)
-                server.quit()
-                print("\n---[ E-mail enviado ]---")
-                sleep(1)
+                logging.info(f"---[ Autenticado com sucesso ]---")
+                server.send_message(self.msg)
+
+            logging.info(f"E-mail '{self.titulo}' enviado para os destinatarios")
+            sleep(1)
+            return True
 
         except Exception as e:
-            print(f"Falha crítica no envio: {e}")
-            raise Exception(f"Falha crítica no envio: {e}")
-
+            logging.error(f"Falha crítica no envio de e-mail: {e}")
+            return False
