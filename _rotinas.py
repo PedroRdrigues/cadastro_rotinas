@@ -133,7 +133,7 @@ class RoutineService(DB):
                 elif routine.tipo == 'IN':
                     self._handle_info(routine)
                 elif routine.tipo == 'TRG':
-                    logging.info(f"Trigger executada para {routine.nome}")
+                    self._hendle_trigger(routine)
 
                 # Finalização e Reagendamento
                 self.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
@@ -223,13 +223,18 @@ class RoutineService(DB):
             destinatarios = self._get_recipient(routine.id)
             hiperlinks = self._get_hiperlink(routine.id)
 
+            posicoes = {nome: i for i, nome in enumerate(hiperlinks.keys())}
+            corpos_organizados = sorted(
+                corpos,
+                key=lambda x: posicoes.get(Path(x).name, len(posicoes))
+            )
             Email(
                 user=getenv("EMAIL_INFORMATIVO_USER"),
                 password=getenv("EMAIL_INFORMATIVO_PASS"),
                 cco=destinatarios,
                 titulo=f"Informativo - {routine.nome}",
                 anexos=anexos,
-                corpo_arq=corpos,
+                corpo_arq=corpos_organizados,
                 hiperlink=hiperlinks
             ).enviar()
         except Exception as e:
@@ -259,19 +264,19 @@ class RoutineService(DB):
             # Para as colunas, o ideal é que sua classe DB retorne o cursor.description
             # Aqui mantive a lógica de busca por tabela, mas simplificada
             colunas = self._get_column_names(routine.sql)
-
             path_excel = self._create_excel(colunas, dados_formatados, routine.nome)
-
             destinatarios = self._get_recipient(routine.id)
-
-            # Email(
-            #     para=destinatarios,
-            #     titulo=f"Relatório - {routine.nome}",
-            #     corpo_texto="Segue em anexo o relatório solicitado.",
-            #     anexos=[str(path_excel)]
-            # ).enviar()
+            Email(
+                para=destinatarios,
+                titulo=f"Relatório - {routine.nome}",
+                corpo_texto="Segue em anexo o relatório solicitado.",
+                anexos=[str(path_excel)]
+            ).enviar()
         except Exception as e:
             raise e
+
+    def _hendle_trigger(self, routine: RoutineData):
+        logging.info(f"---[ ROTINA TRIGGER '{routine.nome}': ID {routine.id} ]---")
 
 
 

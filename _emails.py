@@ -85,30 +85,19 @@ class Email:
 
             # 3. Informativos (Imagens Inline)
             elif self.corpo_arq:
-                itens = self.corpo_arq
-                posicoes = {nome: i for i, nome in enumerate(self.hiperlink.keys())}
-                organised_list_img = sorted(
-                    itens,
-                    key=lambda x: posicoes.get(Path(x).name, len(posicoes))
-                )
-
+                print('corpo_arq',self.corpo_arq)
                 html = "<html><body>"
-                for i, path_img in enumerate(organised_list_img):
+
+                for i, path_img in enumerate(self.corpo_arq):
                     link = self.hiperlink[Path(path_img).name]
                     if link:
-                        html += (f'\n\t<a href={link} >\n'
-                                 f'\t\t<img src="cid:image{i}" alt="Imagem {i}">\n'
-                                 f'\t</a><br>')
+                        html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
                     else:
-                        html += (f'\n\t'
-                                 f'<img src="cid:image{i}" alt="Imagem {i}">'
-                                 f'<br>')
-                html += "\n</body></html>"
-                print(html)
+                        html += f'<img src="cid:image{i}" alt="Imagem {i}"><br>'
 
+                html += "</body></html>"
                 self.msg.attach(MIMEText(html, 'html'))
-
-                for i, img_path in enumerate(organised_list_img):
+                for i, img_path in enumerate(self.corpo_arq):
                     path_img = Path(img_path)
                     if path_img.exists():
                         with open(path_img, 'rb') as f:
