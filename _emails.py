@@ -14,21 +14,14 @@ from pathlib import Path
 from time import sleep
 from typing import List, Optional, Any
 
-# Carregamento de variáveis de ambiente
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    logging.warning("dotenv não instalado. Usando variáveis de ambiente do sistema.")
-
 
 class Email:
     def __init__(
         self,
             user: str = getenv("EMAIL_DEFAULT_USER"),
             password: str = getenv("EMAIL_DEFAULT_PASSWORD"),
-            para: Optional[List[str]] = None,
-            cco: Optional[List[str]] = None,
+            para: Optional[List[str]|str] = None,
+            cco: Optional[List[str]|str] = None,
             anexos: Optional[List[str]] = None,
             titulo: str = "Sem Assunto",
             corpo_texto: Optional[str] = None,
