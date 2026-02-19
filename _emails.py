@@ -14,27 +14,20 @@ from pathlib import Path
 from time import sleep
 from typing import List, Optional, Any
 
-# Carregamento de variáveis de ambiente
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    logging.warning("dotenv não instalado. Usando variáveis de ambiente do sistema.")
-
 
 class Email:
     def __init__(
         self,
-        user: str = getenv("EMAIL_DEFAULT_USER"),
-        password: str = getenv("EMAIL_DEFAULT_PASSWORD"),
-        para: Optional[List[str]] = None,
-        cco: Optional[List[str]] = None,
-        anexos: Optional[List[str]] = None,
-        titulo: str = "Sem Assunto",
-        corpo_texto: Optional[str] = None,
-        corpo_arq: Optional[List[str]] = None,
-        hiperlink: Optional[dict[str, Any]] = None
-    ):
+            user: str = getenv("EMAIL_DEFAULT_USER"),
+            password: str = getenv("EMAIL_DEFAULT_PASSWORD"),
+            para: Optional[List[str]|str] = None,
+            cco: Optional[List[str]|str] = None,
+            anexos: Optional[List[str]] = None,
+            titulo: str = "Sem Assunto",
+            corpo_texto: Optional[str] = None,
+            corpo_arq: Optional[List[str]] = None,
+            hyperlink: Optional[dict[str, Any]] = None
+    ) -> None:
         self._host = getenv("EMAIL_HOST")
         self._port = int(getenv("EMAIL_PORT") or 465)
         self._user = user
@@ -49,7 +42,7 @@ class Email:
         self.anexos = anexos or []
         self.corpo_texto = corpo_texto
         self.corpo_arq = corpo_arq or []
-        self.hiperlink = hiperlink or {}
+        self.hyperlink = hyperlink or {}
 
         # Objeto da mensagem
         self.msg = MIMEMultipart()
@@ -89,7 +82,7 @@ class Email:
                 html = "<html><body>"
 
                 for i, path_img in enumerate(self.corpo_arq):
-                    link = self.hiperlink[Path(path_img).name]
+                    link = self.hyperlink[Path(path_img).name]
                     if link:
                         html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
                     else:
@@ -131,7 +124,6 @@ class Email:
                 if code != 235:
                     raise PermissionError(f"Autenticação recusada: {resp}")
 
-                logging.info(f"---[ Autenticado com sucesso ]---")
                 server.send_message(self.msg)
 
             logging.info(f"E-mail '{self.titulo}' enviado para os destinatarios")

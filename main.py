@@ -1,33 +1,31 @@
-"""Ponto de entrada principal para o Serviço de Rotinas Automáticas."""
-
 import logging
-from sys import exit
+import sys
+from dotenv import load_dotenv
+from _utils import setup_logging
 from _rotinas import RoutineService
 
-# Reutilizamos a configuração de log que já está nos outros módulos
-# Mas garantimos que erros críticos aqui no main também sejam registrados
-logger = logging.getLogger(__name__)
+# Configura o log antes de qualquer outra coisa
+setup_logging()
 
+# Carrega as variáveis de ambiente
+load_dotenv(verbose=True)
 
 def start_service():
-    """Inicializa e executa o serviço de rotinas."""
     logging.info("--- [ Iniciando Sistema de Gestão de Rotinas ] ---")
 
     try:
-        # Instancia o serviço (isso já valida o Pool do DB e o Lock de arquivo)
+        # Agora sim instanciamos o serviço
         rotinas = RoutineService()
-
-        # Inicia o Scheduler (isso trava a execução aqui até o serviço ser parado)
         rotinas.run()
 
     except KeyboardInterrupt:
-        logging.info("Serviço interrompido manualmente pelo usuário (Ctrl+C).")
-        exit(0)
+        logging.info("Serviço interrompido manualmente (Ctrl+C).")
+        sys.exit(0)
 
     except Exception as e:
-        logging.critical(f"Erro fatal ao iniciar o arquivo principal: {e}", exc_info=True)
-        exit(1)
-
+        # Aqui o log vai tanto para o terminal quanto para o arquivo .log
+        logging.critical(f"Erro fatal no loop principal: {e}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     start_service()

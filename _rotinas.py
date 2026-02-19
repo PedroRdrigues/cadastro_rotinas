@@ -1,4 +1,7 @@
-import logging
+from _database import DB, InterfaceError
+from _emails import Email
+from _utils import notify_error
+
 from dataclasses import dataclass
 from datetime import datetime as dt
 from pathlib import Path
@@ -10,6 +13,7 @@ from atexit import register
 from msvcrt import locking, LK_NBLCK
 from os import getpid, _exit, getenv
 from time import sleep
+import logging
 
 # Dependências externas
 try:
@@ -18,15 +22,6 @@ try:
 except ImportError as e:
     logging.error(f"Dependência faltando: {e}")
 
-from _database import DB, InterfaceError
-from _emails import Email
-
-# Configuração de Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 
 
 @dataclass
@@ -63,7 +58,7 @@ class RoutineService(DB):
         if self.lock_handle:
             try:
                 self.lock_handle.close()
-                logging.info("Trava de arquivo liberada.")
+                logging.info("--- [ Trava de arquivo liberada ] ---")
             except Exception:
                 pass
 
@@ -115,6 +110,7 @@ class RoutineService(DB):
                 Thread(target=self.process_routine, args=(routine,), daemon=True).start()
         except Exception as e:
             logging.error(f"Erro ao buscar rotinas: {e}")
+            notify_error(e, "Busca por Rotinas")
 
     def process_routine(self, routine: RoutineData):
         agora = dt.now()
@@ -144,6 +140,7 @@ class RoutineService(DB):
             except Exception as e:
                 logging.error(f"Falha na rotina {routine.id} '{routine.nome}': {e}")
                 self.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
+                notify_error(e, routine.nome)
 
     def _get_hiperlink(self, id_routine: int) -> dict[str, Any]:
        return {
@@ -173,41 +170,47 @@ class RoutineService(DB):
             return []
 
     def _create_excel(self, colunas, conteudo, nome_rotina) -> Path:
-        wb = Workbook()
-        ws = wb.active
-        ws.append(colunas)
-        for row in conteudo:
-            ws.append(row)
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(colunas)
+            for row in conteudo:
+                ws.append(row)
 
-        folder = self.base_path / "planilhas"
-        folder.mkdir(exist_ok=True)
+            folder = self.base_path / "planilhas"
+            folder.mkdir(exist_ok=True)
 
-        # Sanitização de nome de arquivo
-        clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
-        clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
+            # Sanitização de nome de arquivo
+            clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
+            clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
 
-        file_path = folder / f"{clean_name}.xlsx"
-        wb.save(file_path)
-        return file_path
+            file_path = folder / f"{clean_name}.xlsx"
+            wb.save(file_path)
+            return file_path
+        except Exception as e:
+            raise e
 
     def _reschedule(self, routine: RoutineData, dta_agendada: dt, agora: dt):
         """Calcula e atualiza a próxima execução."""
-        if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
-            self.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
-            return
+        try:
+            if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
+                self.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
+                return
 
-        # Mapeamento de SQLs de update por período
-        sql_map = {
-            'Mi': getenv("SQL_UPDATE_SCHEDULE_MINUTE"),
-            'H': getenv("SQL_UPDATE_SCHEDULE_HOUR"),
-            'D': getenv("SQL_UPDATE_SCHEDULE_DAY"),
-            'M': getenv("SQL_UPDATE_SCHEDULE_MONTH")
-        }
+            # Mapeamento de SQLs de update por período
+            sql_map = {
+                'Mi': getenv("SQL_UPDATE_SCHEDULE_MINUTE"),
+                'H': getenv("SQL_UPDATE_SCHEDULE_HOUR"),
+                'D': getenv("SQL_UPDATE_SCHEDULE_DAY"),
+                'M': getenv("SQL_UPDATE_SCHEDULE_MONTH")
+            }
 
-        sql_update = sql_map.get(routine.periodo)
-        if sql_update:
-            self.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
-            logging.info(f"Rotina {routine.nome} (ID: {routine.id}) reagendada.")
+            sql_update = sql_map.get(routine.periodo)
+            if sql_update:
+                self.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
+                logging.info(f"Rotina {routine.nome} (ID: {routine.id}) reagendada.")
+        except Exception as e:
+            raise Exception(f"Erro ao reagendar a rotina: {e}")
 
     def _handle_info(self, routine: RoutineData):
         try:
@@ -235,7 +238,7 @@ class RoutineService(DB):
                 titulo=f"Informativo - {routine.nome}",
                 anexos=anexos,
                 corpo_arq=corpos_organizados,
-                hiperlink=hiperlinks
+                hyperlink=hiperlinks
             ).enviar()
         except Exception as e:
             raise e
