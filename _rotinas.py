@@ -1,6 +1,6 @@
 from _database import DB, InterfaceError
 from _emails import Email
-from _utils import notify_error, active_config_logging
+from _utils import notify_error
 
 from dataclasses import dataclass
 from datetime import datetime as dt
@@ -14,8 +14,6 @@ from msvcrt import locking, LK_NBLCK
 from os import getpid, _exit, getenv
 from time import sleep
 import logging
-
-active_config_logging()
 
 # Dependências externas
 try:
