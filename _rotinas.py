@@ -218,7 +218,14 @@ class RoutineService(DB):
             clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
             # Lógica de informativo (mantida a estrutura de diretórios do original)
             base_info = self.base_path / "informativo"
+            base_info.mkdir(exist_ok=True)
+
+            anexos_dir = base_info / "anexos"
+            anexos_dir.mkdir(exist_ok=True)
             anexos_dir = base_info / "anexos" / clean_name
+
+            corpos_dir = base_info / "corpos"
+            corpos_dir.mkdir(exist_ok=True)
             corpos_dir = base_info / "corpos" / clean_name
 
             anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []

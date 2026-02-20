@@ -14,7 +14,7 @@ def start_service():
     logging.info("--- [ Iniciando Sistema de Gestão de Rotinas ] ---")
 
     try:
-        # Agora sim instanciamos o serviço
+        # Instancia o serviço
         rotinas = RoutineService()
         rotinas.run()
 
