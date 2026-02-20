@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Union
 from _emails import Email
 
+base_path = Path.cwd()
 
 def setup_logging():
     """Configura o logging para console e arquivo simultaneamente."""
-    log_dir = Path.cwd() / "logs"
+    log_dir = base_path / "logs"
     log_dir.mkdir(exist_ok=True)
 
     log_file = log_dir / f"service_{dt.now().strftime('%Y-%m')}.log"
@@ -25,7 +26,7 @@ def setup_logging():
             logging.StreamHandler()  # Mantém o log no terminal
         ]
     )
-    logging.info("\n\n--- [ Sistema de logs inicializado ] ---")
+    logging.info("--- [ Sistema de logs inicializado ] ---")
 
 
 def notify_error(err: Union[str, Exception], routine_name: str) -> None:
@@ -56,6 +57,22 @@ def notify_error(err: Union[str, Exception], routine_name: str) -> None:
         logging.warning(f"Notificação de erro enviada para a rotina: {routine_name}")
     except Exception as e:
         logging.error(f"Falha ao enviar e-mail de notificação de erro: {e}")
+
+def create_essential_folders():
+    log_dir = base_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+
+    folder_spreadsheets = base_path / "planilhas"
+    folder_spreadsheets.mkdir(exist_ok=True)
+
+    base_info = base_path / "informativo"
+    base_info.mkdir(exist_ok=True)
+
+    anexos_dir = base_info / "anexos"
+    anexos_dir.mkdir(exist_ok=True)
+
+    corpos_dir = base_info / "corpos"
+    corpos_dir.mkdir(exist_ok=True)
 
 
 if __name__ == "__main__":

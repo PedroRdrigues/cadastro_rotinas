@@ -51,9 +51,9 @@ Crie um arquivo `.env` na raiz seguindo o modelo `.env.example`.
 3. **Instale como Serviço Windows:**
 Abra o terminal como Administrador e utilize o NSSM:
 ```bash
-nssm install NomeDoSeuServico
-nssm edit NomeDoSeuServico
-nssm start NomeDoSeuServico
+nssm install RotinasService
+nssm edit RotinasService
+nssm start RotinasService
 
 ```
 
@@ -70,4 +70,4 @@ nssm start NomeDoSeuServico
 ---
 
 **Desenvolvido por [Pedro Rodrigues]**
-*Conecte-se comigo no [LinkedIn*](https://www.google.com/search?q=seu-link-aqui)
+*Conecte-se comigo no [LinkedIn*](www.linkedin.com/in/pedrordrigues)
