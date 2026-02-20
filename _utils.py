@@ -25,7 +25,7 @@ def setup_logging():
             logging.StreamHandler()  # Mantém o log no terminal
         ]
     )
-    logging.info("--- [ Sistema de logs inicializado ] ---")
+    logging.info("\n\n--- [ Sistema de logs inicializado ] ---")
 
 
 def notify_error(err: Union[str, Exception], routine_name: str) -> None:
