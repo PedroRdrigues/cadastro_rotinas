@@ -5,7 +5,6 @@ import traceback
 from datetime import datetime as dt
 from os import getenv
 from pathlib import Path
-from typing import Union
 from _emails import Email
 
 base_path = Path.cwd()
@@ -29,7 +28,7 @@ def setup_logging():
     logging.info("--- [ Sistema de logs inicializado ] ---")
 
 
-def notify_error(err: Union[str, Exception], routine_name: str) -> None:
+def notify_error(err: str|Exception, routine_name: str) -> None:
     """
     Envia um alerta por e-mail com os detalhes técnicos da falha.
     """
@@ -56,7 +55,7 @@ def notify_error(err: Union[str, Exception], routine_name: str) -> None:
         ).enviar()
         logging.warning(f"Notificação de erro enviada para a rotina: {routine_name}")
     except Exception as e:
-        logging.error(f"Falha ao enviar e-mail de notificação de erro: {e}")
+        logging.critical(f"Falha ao enviar e-mail de notificação de erro: {e}", exc_info=True)
 
 def create_essential_folders():
     log_dir = base_path / "logs"

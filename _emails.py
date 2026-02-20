@@ -18,8 +18,8 @@ from typing import List, Optional, Any
 class Email:
     def __init__(
         self,
-            user: str = getenv("EMAIL_DEFAULT_USER"),
-            password: str = getenv("EMAIL_DEFAULT_PASSWORD"),
+            user: Optional[str] = None,
+            password: Optional[str] = None,
             para: Optional[List[str]|str] = None,
             cco: Optional[List[str]|str] = None,
             anexos: Optional[List[str]] = None,
@@ -29,9 +29,10 @@ class Email:
             hyperlink: Optional[dict[str, Any]] = None
     ) -> None:
         self._host = getenv("EMAIL_HOST")
-        self._port = int(getenv("EMAIL_PORT") or 465)
-        self._user = user
-        self._password = password
+        self._port = int(getenv("EMAIL_PORT"))
+        self._user = user or getenv("EMAIL_DEFAULT_USER")
+        self._password = password or getenv("EMAIL_DEFAULT_PASSWORD")
+
 
         if not para and not cco:
             raise ValueError("É necessário informar ao menos um destinatário (para ou cco).")
@@ -131,5 +132,4 @@ class Email:
             return True
 
         except Exception as e:
-            logging.error(f"Falha crítica no envio de e-mail: {e}")
-            return False
+            raise Exception(f"Falha crítica no envio de e-mail: {e}")
