@@ -58,7 +58,7 @@ class RoutineService(DB):
         if self.lock_handle:
             try:
                 self.lock_handle.close()
-                logging.info("--- [ Trava de arquivo liberada ] ---")
+                logging.info("--- [ Trava de arquivo liberada ] ---\n")
             except Exception:
                 pass
 
