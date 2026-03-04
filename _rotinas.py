@@ -1,6 +1,6 @@
 from _database import DB, InterfaceError
 from _emails import Email
-from _utils import notify_error
+from _utils import notify_error, check_and_update_log_file
 
 from dataclasses import dataclass
 from datetime import datetime as dt
@@ -101,7 +101,8 @@ class RoutineService(DB):
             self.release_lock()
 
     def check_routines(self):
-        logging.info("Verificando rotinas pendentes...")
+        # logging.info("Verificando rotinas pendentes...")
+        check_and_update_log_file()
         try:
             rows = self.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
 

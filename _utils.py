@@ -9,13 +9,8 @@ from _emails import Email
 
 base_path = Path.cwd()
 
-def setup_logging():
+def setup_logging(log_file):
     """Configura o logging para console e arquivo simultaneamente."""
-    log_dir = base_path / "logs"
-    log_dir.mkdir(exist_ok=True)
-
-    log_file = log_dir / f"service_{dt.now().strftime('%Y-%m')}.log"
-
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
@@ -23,9 +18,21 @@ def setup_logging():
         handlers=[
             logging.FileHandler(log_file, encoding='utf-8'),
             logging.StreamHandler()  # Mantém o log no terminal
-        ]
+        ],
+        force=True
     )
     logging.info("--- [ Sistema de logs inicializado ] ---")
+
+def check_and_update_log_file():
+    log_dir = base_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"service_{dt.now().strftime('%Y-%m')}.log"
+
+    # Lógica: Se o arquivo NÃO existe (virada de mês)
+    # OU se o logger ainda não tem handlers (primeira execução do script)
+    if not log_file.exists() or not logging.getLogger().hasHandlers():
+        logging.info(f"Configurando novo arquivo de log: {log_file.name}")
+        setup_logging(log_file)
 
 
 def notify_error(err: str|Exception, routine_name: str) -> None:
@@ -49,7 +56,7 @@ def notify_error(err: str|Exception, routine_name: str) -> None:
 
     try:
         Email(
-            para=getenv("EMAIL_RECIPIENTS_ERROR"),
+            para=getenv("EMAIL_RECIPIENTS_ERROR").split(","),
             titulo=f"🚨 ERRO CRÍTICO: {routine_name}",
             corpo_texto=corpo
         ).enviar()
@@ -75,5 +82,4 @@ def create_essential_folders():
 
 
 if __name__ == "__main__":
-    setup_logging()
-    notify_error("Erro de teste", 'Teste de falha na rotina')
+    create_current_log_file()

@@ -1,11 +1,10 @@
 import logging
 import sys
 from dotenv import load_dotenv
-from _utils import setup_logging, create_essential_folders
+from _utils import check_and_update_log_file, create_essential_folders
 from _rotinas import RoutineService
 
-# Configura o log antes de qualquer outra coisa
-setup_logging()
+check_and_update_log_file()
 
 # Carrega as variáveis de ambiente
 load_dotenv(verbose=True)
