@@ -22,11 +22,23 @@ DB_PASS = getenv("DB_PASS")
 DB_DSN = getenv("DB_DSN")
 
 class DB:
+    _instance = None
+    _initialized = False
+
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DB, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self):
         """Inicializa o Pool de Conexões Oracle."""
+        if self._initialized:
+            return
+
         try:
             # O Pool gerencia as conexões automaticamente, evitando 'Timed Out'
-            self.pool = create_pool(
+            self._pool = create_pool(
                 user=DB_USER,
                 password=DB_PASS,
                 dsn=DB_DSN,
@@ -35,27 +47,29 @@ class DB:
                 increment=1
             )
             logging.info("Pool de conexões Oracle estabelecido com sucesso.")
+            self._initialized = True
         except Exception as e:
             logging.critical(f"Falha crítica ao conectar no Banco: {e}")
             raise
 
-    def consultar(self, query: str, params: Optional[List] = None) -> Dict[str, Any]:
+    def consultar(self, query: str, params: Optional[list|tuple] = None) -> Dict[str, Any]:
         """
         Executa uma consulta e retorna um dicionário com:
-        - 'data': Lista de registros (cada registro é uma lista)
+        - 'data': Lista de linhas consultadas (cada registro é uma lista)
         - 'description': Metadados das colunas
         """
         try:
-            with self.pool.acquire() as connection:
+            with self._pool.acquire() as connection:
                 with connection.cursor() as cursor:
                     if params:
                         cursor.execute(query, params)
                     else:
                         cursor.execute(query)
 
-                    # description contém o nome das colunas e tipos
+                    # description com o nome das colunas e tipos
                     description = cursor.description
-                    # Converte tuplas em listas para manter compatibilidade com seu processamento de Excel
+
+                    # Converte tuplas em listas para manter compatibilidade com o processamento de Excel
                     data = [list(row) for row in cursor.fetchall()]
 
                     return {
@@ -66,10 +80,10 @@ class DB:
             logging.error(f"Erro ao executar consulta SQL: {e}")
             raise Exception(f"Erro ao executar consulta SQL: {e}")
 
-    def executar(self, sql: str, params: Optional[List] = None) -> bool:
-        """Executa comandos de INSERT, UPDATE, DELETE ou PROCEDURE."""
+    def executar(self, sql: str, params: Optional[list|tuple] = None) -> bool:
+        """Executa comandos SQL."""
         try:
-            with self.pool.acquire() as connection:
+            with self._pool.acquire() as connection:
                 with connection.cursor() as cursor:
                     if params:
                         cursor.execute(sql, params)
@@ -80,3 +94,6 @@ class DB:
         except Exception as e:
             logging.error(f"Erro ao executar comando SQL (Commit cancelado): {e}")
             return False
+
+if __name__ == "__main__":
+    pass

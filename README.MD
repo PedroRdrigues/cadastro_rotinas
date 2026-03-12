@@ -4,22 +4,45 @@ Um motor de execução de rotinas robusto que transforma scripts em serviços re
 
 ## 🚀 Funcionalidades
 
-* **Serviço Windows:** Execução contínua em segundo plano via NSSM.
-* **Multithreading:** Processamento paralelo de rotinas para evitar gargalos.
-* **Tipos de Rotina:** Suporte nativo para:
-* 📊 **Relatórios:** Geração e envio de dados.
-* 🔔 **Informativos:** Alertas e comunicações.
-* ⚡ **Triggers:** Disparos de eventos em outros sistemas.
+- **Serviço Windows:** Execução contínua em segundo plano via NSSM.
+- **Multithreading:** Processamento paralelo de rotinas para evitar gargalos.
+- **Tipos de Rotina:** Suporte nativo para:
+  - 📊 **Relatórios:** Geração e envio de dados.
+  - 🔔 **Informativos:** Alertas e comunicações.
+  - ⚡ **Triggers:** Disparos de eventos em outros sistemas.
 
 
-* **Notificação Automática:** Sistema de mailing integrado pós-execução.
+- **Notificação Automática:** Sistema de mailing integrado pós-execução.
 
 ## 🛠️ Arquitetura do Banco de Dados
 
 O serviço baseia-se em duas tabelas principais:
 
-1. **`cadastro_rotinas`**: Contém o nome, tipo, comando de execução, status (ativo/inativo) e o cronograma/trigger.
-2. **`email_rotinas`**: Lista de destinatários vinculados a cada rotina.
+### **`cadastro_rotinas`**: Configurações das Rotinas
+- `id_rotina` : Identificador único de cada rotina. **(SEQUENCE)**;
+- `nome` : Nome da Rotina. **(OBRIGATÓRIO)**;
+- `periodo` : Definição do período de execução, podendo ser Mi -> MINUTOS / H -> HORAS / D-> DIAS / M -> MESES / U -> UNICO. **(OBRIGATÓRIO)**;
+- `intervalo` : Definição do intervalo entre cada execução referente ao período. Ex: período:D; intervalo:10. Dessa forma a rotina será executada a cada 10 dias;
+- `dta_inicial` : Data da primeira execução. **(OBRIGATÓRIO)**;
+- `dta_proxiam` : Data da próxima execução. Esse campo é atualizado automaticamente com os dados de período e intervalo;
+- `dta_final` : Data da ultima execução;
+- `consulta` : Consulta sql para execução de relatórios.
+- `enviado` : Informa se o último envio foi realizado com sucesso;
+- `status` : Informa se a rotina está em execução -> E, ou se já foi finalizou a execução -> F
+- `tipo` : Define o tipo da rotina, podendo ser  RE -> RELATORIO com anexo / IN -> INFORMATIVO / TRG -> TRIGGER. **(OBRIGATÓRIO)**;
+- `ativo` : Define se a rotina está ativa S ou não N. **(OBRIGATÓRIO)**;
+- `tent_erro` : Quantidade de execução consecutivas com erro. Após a 5ª execução a rotina é inativada.
+
+
+### **`email_rotinas`**: Lista de destinatários vinculados a cada rotina.
+- `id_rotina` : Vincula o e-mail à rotina cadastrada. **(OBRIGATÓRIO)**;
+- `email` : Endereço de e-mail do destinatário para recebimento da mensagem gerada pela rotina.
+
+### **`estrutura_informativo`**: Estrutura de organização de imagens no corpo do informativo
+- `codigo` : Identificador único de cada imagem. **(SEQUENCE)**;
+- `id_rotina` : Vincula o e-mail à rotina cadastrada. **(OBRIGATÓRIO)**;
+- `hiper_link` : Link que será vinculado à imagem dentro do corpo do informativo;
+- `corpo` : Nome do arquivo de imagem com a extensão. **(OBRIGATÓRIO)**.
 
 ## ⚙️ Como Funciona
 
@@ -28,7 +51,9 @@ O fluxo de operação segue o ciclo abaixo:
 1. **Polling:** O serviço consulta a tabela `cadastro_rotinas` em intervalos definidos.
 2. **Verificação:** Filtra rotinas ativas cuja hora de execução coincide com o `now()`.
 3. **Processamento:** Para cada rotina encontrada, o sistema abre uma **Thread dedicada**. Isso permite que um relatório pesado não atrase um informativo simples.
-4. **Conclusão:** Após o término da tarefa, o serviço busca os contatos na `email_rotinas` e dispara o log/status da operação.
+4. **Conclusão:** Após o término da tarefa, o serviço busca os contatos na `email_rotinas` e dispara um e-mail.
+
+_Obs: Caso a rotina seja do tipo **IN** a tabela `estrutura_informativo` é consultada para verificar a organização das imagens no corpo do e-mail._
 
 ## 💻 Instalação e Configuração
 

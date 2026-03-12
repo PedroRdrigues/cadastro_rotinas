@@ -1,12 +1,11 @@
-from _database import DB, InterfaceError
+from _database import InterfaceError, DB
 from _emails import Email
-from _utils import notify_error, check_and_update_log_file
+from _utils import notify_error, check_and_update_log_file, RoutineData
 
-from dataclasses import dataclass
 from datetime import datetime as dt
 from pathlib import Path
 from threading import Thread
-from typing import List, Optional, Any
+from typing import List, Any
 from unicodedata import category, normalize
 
 from atexit import register
@@ -23,32 +22,10 @@ except ImportError as e:
     logging.error(f"Dependência faltando: {e}")
 
 
-
-@dataclass
-class RoutineData:
-    """Estrutura para mapear os dados da rotina do banco."""
-    id: int
-    nome: str
-    periodo: str
-    intervalo: int
-    dta_inicial: dt
-    dta_proxima: Optional[dt]
-    dta_final: Optional[dt]
-    sql: Optional[str]
-    tipo: str
-
-    @classmethod
-    def from_row(cls, row):
-        return cls(
-            id=row[0], nome=row[1], periodo=row[2], intervalo=row[3],
-            dta_inicial=row[4], dta_proxima=row[5], dta_final=row[6],
-            sql=str(row[7]).upper(), tipo=row[10]
-        )
-
-
-class RoutineService(DB):
+class RoutineService:
     def __init__(self):
         super().__init__()
+        self.db = DB()
         self.base_path = Path.cwd()
         self.lock_file_path = self.base_path / "service.lock"
         self.lock_handle = None
@@ -59,7 +36,7 @@ class RoutineService(DB):
             try:
                 self.lock_handle.close()
                 logging.info("--- [ Trava de arquivo liberada ] ---\n")
-            except Exception:
+            except:
                 pass
 
     def acquire_lock(self):
@@ -104,7 +81,7 @@ class RoutineService(DB):
         # logging.info("Verificando rotinas pendentes...")
         check_and_update_log_file()
         try:
-            rows = self.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
+            rows = self.db.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
 
             for row in rows:
                 routine = RoutineData.from_row(row)
@@ -122,7 +99,7 @@ class RoutineService(DB):
                 logging.info(f"Iniciando: {routine.nome} (ID: {routine.id})")
 
                 # Status: Executando
-                self.executar(getenv("SQL_UPDATE_SET_TO_E_N"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_E_N"), [routine.id])
 
                 # Dispatcher de tipos
                 if routine.tipo == 'RE':
@@ -133,19 +110,19 @@ class RoutineService(DB):
                     self._hendle_trigger(routine)
 
                 # Finalização e Reagendamento
-                self.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
                 self._reschedule(routine, dta_agendada, agora)
 
                 logging.info(f"Sucesso:  {routine.nome} (ID: {routine.id})")
 
             except Exception as e:
                 logging.error(f"Falha na rotina {routine.id} '{routine.nome}': {e}")
-                self.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
-                notify_error(e, routine.nome)
+                self.db.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
+                notify_error(e, routine)
 
     def _get_hiperlink(self, id_routine: int) -> dict[str, Any]:
        return {
-                h[0]: h[1] for h in self.consultar(
+                h[0]: h[1] for h in self.db.consultar(
                     getenv("SQL_GET_HIPERLINK"),
                     [id_routine]
                 )['data']
@@ -153,7 +130,7 @@ class RoutineService(DB):
 
     def _get_recipient(self, id_routine: int) -> List[str]:
         return [
-                    r[0] for r in self.consultar(
+                    r[0] for r in self.db.consultar(
                         getenv("SQL_GET_RECIPIENTS"), [id_routine]
                     )['data']
                 ]
@@ -162,7 +139,7 @@ class RoutineService(DB):
         """Extrai nomes de colunas dos metadados da consulta."""
         try:
             # Pegamos a descrição do cursor que o seu _database agora retorna
-            result = self.consultar(sql)
+            result = self.db.consultar(sql)
             if result and 'description' in result:
                 return [c[0] for c in result['description']]
             return []
@@ -195,7 +172,7 @@ class RoutineService(DB):
         """Calcula e atualiza a próxima execução."""
         try:
             if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
-                self.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
                 return
 
             # Mapeamento de SQLs de update por período
@@ -208,16 +185,18 @@ class RoutineService(DB):
 
             sql_update = sql_map.get(routine.periodo)
             if sql_update:
-                self.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
+                self.db.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
                 logging.info(f"Rotina {routine.nome} (ID: {routine.id}) reagendada.")
         except Exception as e:
             raise Exception(f"Erro ao reagendar a rotina: {e}")
 
     def _handle_info(self, routine: RoutineData):
         try:
+            # Faz a padronização do nome das pastas
             clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
             clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
-            # Lógica de informativo (mantida a estrutura de diretórios do original)
+
+            # Mapeia a pasta de informativos as sub pastas
             base_info = self.base_path / "informativo"
             base_info.mkdir(exist_ok=True)
 
@@ -229,16 +208,23 @@ class RoutineService(DB):
             corpos_dir.mkdir(exist_ok=True)
             corpos_dir = base_info / "corpos" / clean_name
 
+            # Pega o caminho absoluto de todos os arquivos na pasta da rotina
             anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []
             corpos = [str(p) for p in corpos_dir.glob("*")] if corpos_dir.exists() else []
+
+            # Pega os destinatários do e-mail
             destinatarios = self._get_recipient(routine.id)
+
+            # Cria um dicionário com os hiperlink de cada imagem(caso tenha)
             hiperlinks = self._get_hiperlink(routine.id)
 
             posicoes = {nome: i for i, nome in enumerate(hiperlinks.keys())}
+
             corpos_organizados = sorted(
                 corpos,
                 key=lambda x: posicoes.get(Path(x).name, len(posicoes))
             )
+
             Email(
                 user=getenv("EMAIL_INFORMATIVO_USER"),
                 password=getenv("EMAIL_INFORMATIVO_PASS"),
@@ -255,7 +241,7 @@ class RoutineService(DB):
         """Lógica de geração e envio de relatório Excel."""
         try:
             # Executa a query principal
-            dados = self.consultar(routine.sql)['data']
+            dados = self.db.consultar(routine.sql)['data']
             # logging.info(f"Dados do db: {dados}")
 
             # Processamento de datas para exibição no Excel
@@ -288,9 +274,6 @@ class RoutineService(DB):
 
     def _hendle_trigger(self, routine: RoutineData):
         logging.info(f"---[ ROTINA TRIGGER '{routine.nome}': ID {routine.id} ]---")
-
-
-
 
 
 if __name__ == "__main__":
