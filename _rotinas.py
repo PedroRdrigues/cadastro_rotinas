@@ -192,21 +192,17 @@ class RoutineService:
 
     def _handle_info(self, routine: RoutineData):
         try:
-            # Faz a padronização do nome das pastas
-            clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
-            clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
-
             # Mapeia a pasta de informativos as sub pastas
             base_info = self.base_path / "informativo"
             base_info.mkdir(exist_ok=True)
 
             anexos_dir = base_info / "anexos"
             anexos_dir.mkdir(exist_ok=True)
-            anexos_dir = base_info / "anexos" / clean_name
+            anexos_dir = base_info / "anexos" / f"rotina_{routine.id}"
 
             corpos_dir = base_info / "corpos"
             corpos_dir.mkdir(exist_ok=True)
-            corpos_dir = base_info / "corpos" / clean_name
+            corpos_dir = base_info / "corpos" /  f"rotina_{routine.id}"
 
             # Pega o caminho absoluto de todos os arquivos na pasta da rotina
             anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []

@@ -28,7 +28,7 @@ class RoutineData:
     @classmethod
     def from_row(cls, row):
         return cls(
-            id=int(row[0]), nome=str(row[1]), periodo=str(row[2]), intervalo=int(row[3]),
+            id=row[0], nome=row[1], periodo=row[2], intervalo=row[3],
             dta_inicial=row[4], dta_proxima=row[5], dta_final=row[6],
             sql=str(row[7]).upper(), tipo=row[10]
         )
