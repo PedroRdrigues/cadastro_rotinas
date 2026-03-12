@@ -5,9 +5,33 @@ import traceback
 from datetime import datetime as dt
 from os import getenv
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Optional
 from _emails import Email
+from _database import DB
 
 base_path = Path.cwd()
+
+@dataclass
+class RoutineData:
+    """Estrutura para mapear os dados da rotina do banco."""
+    id: int
+    nome: str
+    periodo: str
+    intervalo: int
+    dta_inicial: dt
+    dta_proxima: Optional[dt]
+    dta_final: Optional[dt]
+    sql: Optional[str]
+    tipo: str
+
+    @classmethod
+    def from_row(cls, row):
+        return cls(
+            id=row[0], nome=row[1], periodo=row[2], intervalo=row[3],
+            dta_inicial=row[4], dta_proxima=row[5], dta_final=row[6],
+            sql=str(row[7]).upper(), tipo=row[10]
+        )
 
 def setup_logging(log_file):
     """Configura o logging para console e arquivo simultaneamente."""
@@ -35,7 +59,23 @@ def check_and_update_log_file():
         setup_logging(log_file)
 
 
-def notify_error(err: str|Exception, routine_name: str) -> None:
+def attempt_error(id_rotina: int) -> bool|None:
+    """
+    Verifica a quantidade de tentativas com erro, caso o valor das tentativas seja maior ou igual a 5 a rotina é inativada e a quantidade de tentativas é zerada
+    """
+    db = DB()
+    if db.consultar(getenv("SQL_ATTEMPT_ERROR"),[id_rotina])['data']:
+        db.executar(getenv("SQL_UPDATE_RESET_TENT_ERRO"), [id_rotina])
+        logging.info(f"---[ Rotina {id_rotina} inativada ]---")
+
+        return True
+
+    db.executar(getenv("SQL_UPDATE_TENT_ERRO"), [id_rotina])
+
+    return None
+
+
+def notify_error(err: Exception|str, routine: RoutineData|str) -> None:
     """
     Envia um alerta por e-mail com os detalhes técnicos da falha.
     """
@@ -43,24 +83,36 @@ def notify_error(err: str|Exception, routine_name: str) -> None:
     detalhes_erro = "".join(traceback.format_exception(None, err, err.__traceback__))\
         if isinstance(err,Exception) else str(err)
 
+    if not isinstance(routine, RoutineData):
+        nome = routine
+        id_rotina = 0
+    else:
+        nome = routine.nome
+        id_rotina = routine.id
+
+
     corpo = (
         f"⚠️ ALERTA DE FALHA EM ROTINA\n"
         f"------------------------------------------\n"
-        f"Rotina: {routine_name}\n"
+        f"Rotina: {nome}\n"
         f"Data/Hora: {dt.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
         f"\nDetalhes Técnicos:\n"
         f"{detalhes_erro}\n"
         f"------------------------------------------\n"
-        f"Favor verificar o servidor de automações."
+        f"Favor verificar o servidor de automações. "
     )
+
+    if attempt_error(id_rotina):
+        corpo += "Rotina inativada, limite de tentativas atingido."
+        # print(corpo)
 
     try:
         Email(
             para=getenv("EMAIL_RECIPIENTS_ERROR").split(","),
-            titulo=f"🚨 ERRO CRÍTICO: {routine_name}",
+            titulo=f"🚨 ERRO CRÍTICO: {nome}",
             corpo_texto=corpo
         ).enviar()
-        logging.warning(f"Notificação de erro enviada para a rotina: {routine_name}")
+        logging.warning(f"Notificação de erro enviada para a rotina: {nome}")
     except Exception as e:
         logging.critical(f"Falha ao enviar e-mail de notificação de erro: {e}", exc_info=True)
 
@@ -82,4 +134,4 @@ def create_essential_folders():
 
 
 if __name__ == "__main__":
-    create_current_log_file()
+    pass

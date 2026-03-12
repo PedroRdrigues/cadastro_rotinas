@@ -79,7 +79,6 @@ class Email:
 
             # 3. Informativos (Imagens Inline)
             elif self.corpo_arq:
-                print('corpo_arq',self.corpo_arq)
                 html = "<html><body>"
 
                 for i, path_img in enumerate(self.corpo_arq):
