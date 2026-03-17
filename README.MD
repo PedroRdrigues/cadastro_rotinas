@@ -2,6 +2,13 @@
 
 Um motor de execução de rotinas robusto que transforma scripts em serviços resilientes do Windows. O sistema monitora agendamentos em banco de dados, gerencia execuções concorrentes via Threads e automatiza o report de resultados por e-mail.
 
+## Sumário
+- [Funcionalidades](#Funcionalidades)
+- [Arquitetura do Banco de Dados](#Arquitetura do Banco de Dados)
+- [Como Funciona](#Como Funciona)
+- [Instalação e Configuração](#Instalação e Configuração)
+- [Estrutura de Tipos](#Estrutura de Tipos)
+
 ## 🚀 Funcionalidades
 
 - **Serviço Windows:** Execução contínua em segundo plano via NSSM.
@@ -16,7 +23,7 @@ Um motor de execução de rotinas robusto que transforma scripts em serviços re
 
 ## 🛠️ Arquitetura do Banco de Dados
 
-O serviço baseia-se em duas tabelas principais:
+O serviço baseia-se em três tabelas principais:
 
 ### **`cadastro_rotinas`**: Configurações das Rotinas
 - `id_rotina` : Identificador único de cada rotina. **(SEQUENCE)**;

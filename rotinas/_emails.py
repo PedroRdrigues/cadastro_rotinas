@@ -79,10 +79,6 @@ class Email:
 
             # 3. Informativos (Imagens Inline)
             elif self.corpo_arq:
-                # arq_banco = list(self.hyperlink.keys())
-                # arq_local = [
-                #     a for a in self.corpo_arq if Path(a).name in arq_banco
-                # ]
                 arq_html =  next((a for a in self.corpo_arq if a.endswith(".html")), None)
                 if arq_html:
                     with open(arq_html, 'r', encoding='utf-8') as f:
