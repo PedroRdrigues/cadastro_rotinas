@@ -1,13 +1,12 @@
 from _database import InterfaceError, DB
 from _emails import Email
-from _utils import notify_error, check_and_update_log_file, RoutineData
+from _utils import notify_error, check_and_update_log_file, RoutineData, convert_word_to_html
 
 from datetime import datetime as dt
 from pathlib import Path
 from threading import Thread
 from typing import List, Any
 from unicodedata import category, normalize
-
 from atexit import register
 from msvcrt import locking, LK_NBLCK
 from os import getpid, _exit, getenv
@@ -147,6 +146,42 @@ class RoutineService:
             logging.error(f"Erro ao obter colunas: {e}")
             return []
 
+    def _get_corpos(self, routine_id):
+        base_info = self.base_path / "informativo"
+        nome = f"rotina_{routine_id}"
+
+        corpos_dir = base_info / "corpos"
+        corpos_dir.mkdir(exist_ok=True)
+        corpos_dir = base_info / "corpos" / nome
+
+        # Mapeia todos os arquivos dentro do diretório da rotina
+        corpos = [str(p) for p in corpos_dir.glob("*")] if corpos_dir.exists() else []
+
+        # Cria um dicionário com os hiperlink de cada imagem(caso tenha)
+        hiperlinks = self._get_hiperlink(routine_id)
+
+        # Verifica quais arquivos estão no banco e localmente para que não sejam enviados arquivos indesejados
+        arq_banco = list(hiperlinks.keys())
+        corpos = [
+            a for a in corpos if Path(a).name in arq_banco
+        ]
+
+        # Verifica se existe algum aquivo word.
+        arq = next((a for a in corpos if a.endswith(".docx") or a.endswith(".doc")), corpos)
+        if isinstance(arq, str):
+            arq = convert_word_to_html(arq)
+
+        corpos = [arq] if isinstance(arq, str) else corpos
+
+        # Mapeia as posições de cada arquiv/imagem com base na ordem estabelecida no banco e organiza os arquivos locais dentro do corpo.
+        posicoes = {nome: i for i, nome in enumerate(hiperlinks.keys())}
+        corpos_organizados = sorted(
+            corpos,
+            key=lambda x: posicoes.get(Path(x).name, len(posicoes))
+        )
+
+        return corpos_organizados, hiperlinks
+
     def _create_excel(self, colunas, conteudo, nome_rotina) -> Path:
         try:
             wb = Workbook()
@@ -192,34 +227,23 @@ class RoutineService:
 
     def _handle_info(self, routine: RoutineData):
         try:
+            nome = f"rotina_{routine.id}"
+
             # Mapeia a pasta de informativos as sub pastas
             base_info = self.base_path / "informativo"
             base_info.mkdir(exist_ok=True)
 
             anexos_dir = base_info / "anexos"
             anexos_dir.mkdir(exist_ok=True)
-            anexos_dir = base_info / "anexos" / f"rotina_{routine.id}"
-
-            corpos_dir = base_info / "corpos"
-            corpos_dir.mkdir(exist_ok=True)
-            corpos_dir = base_info / "corpos" /  f"rotina_{routine.id}"
-
-            # Pega o caminho absoluto de todos os arquivos na pasta da rotina
-            anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []
-            corpos = [str(p) for p in corpos_dir.glob("*")] if corpos_dir.exists() else []
+            anexos_dir = base_info / "anexos" / nome
 
             # Pega os destinatários do e-mail
             destinatarios = self._get_recipient(routine.id)
 
-            # Cria um dicionário com os hiperlink de cada imagem(caso tenha)
-            hiperlinks = self._get_hiperlink(routine.id)
-
-            posicoes = {nome: i for i, nome in enumerate(hiperlinks.keys())}
-
-            corpos_organizados = sorted(
-                corpos,
-                key=lambda x: posicoes.get(Path(x).name, len(posicoes))
-            )
+            # Pega o caminho absoluto de todos os arquivos na pasta da rotina
+            anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []
+            corpos, hiperlinks = self._get_corpos(routine.id)
+            print(anexos)
 
             Email(
                 user=getenv("EMAIL_INFORMATIVO_USER"),
@@ -227,9 +251,10 @@ class RoutineService:
                 cco=destinatarios,
                 titulo=f"Informativo - {routine.nome}",
                 anexos=anexos,
-                corpo_arq=corpos_organizados,
+                corpo_arq=corpos,
                 hyperlink=hiperlinks
             ).enviar()
+
         except Exception as e:
             raise e
 

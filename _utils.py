@@ -7,6 +7,8 @@ from os import getenv
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+from mammoth import convert_to_html
+
 from _emails import Email
 from _database import DB
 
@@ -131,6 +133,20 @@ def create_essential_folders():
 
     corpos_dir = base_info / "corpos"
     corpos_dir.mkdir(exist_ok=True)
+
+
+def convert_word_to_html(input_path):
+    with open(input_path, "rb") as docx_file:
+        result = convert_to_html(docx_file)
+        html = result.value  # O HTML gerado
+        messages = result.messages  # Mensagens de aviso, se houver
+
+    output_path = input_path.replace("docx" or "doc", "html")
+
+    with open(output_path, "w", encoding="utf-8") as html_file:
+        html_file.write(html)
+
+    return output_path
 
 
 if __name__ == "__main__":

@@ -79,26 +79,34 @@ class Email:
 
             # 3. Informativos (Imagens Inline)
             elif self.corpo_arq:
-                html = "<html><body>"
+                # arq_banco = list(self.hyperlink.keys())
+                # arq_local = [
+                #     a for a in self.corpo_arq if Path(a).name in arq_banco
+                # ]
+                arq_html =  next((a for a in self.corpo_arq if a.endswith(".html")), None)
+                if arq_html:
+                    with open(arq_html, 'r', encoding='utf-8') as f:
+                        html = f.read()
 
-                for i, path_img in enumerate(self.corpo_arq):
-                    link = self.hyperlink[Path(path_img).name]
-                    if link:
-                        html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
-                    else:
-                        html += f'<img src="cid:image{i}" alt="Imagem {i}"><br>'
-
-                html += "</body></html>"
-                self.msg.attach(MIMEText(html, 'html'))
-                for i, img_path in enumerate(self.corpo_arq):
-                    path_img = Path(img_path)
-                    if path_img.exists():
-                        with open(path_img, 'rb') as f:
-                            mime_img = MIMEImage(f.read())
-                            mime_img.add_header('Content-ID', f'<image{i}>')
-                            mime_img.add_header('Content-Disposition', 'inline', filename=path_img.name)
-                            self.msg.attach(mime_img)
-
+                    self.msg.attach(MIMEText(html, 'html'))
+                else:
+                    html = "<html><body>"
+                    for i, path_img in enumerate(self.corpo_arq):
+                        link = self.hyperlink[Path(path_img).name]
+                        if link:
+                            html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
+                        else:
+                            html += f'<img src="cid:image{i}" alt="Imagem {i}"><br>'
+                    html += "</body></html>"
+                    self.msg.attach(MIMEText(html, 'html'))
+                    for i, img_path in enumerate(self.corpo_arq):
+                        path_img = Path(img_path)
+                        if path_img.exists():
+                            with open(path_img, 'rb') as f:
+                                mime_img = MIMEImage(f.read())
+                                mime_img.add_header('Content-ID', f'<image{i}>')
+                                mime_img.add_header('Content-Disposition', 'inline', filename=path_img.name)
+                                self.msg.attach(mime_img)
         except Exception as e:
             logging.error(f"Erro ao montar estrutura do e-mail: {e}")
             raise
