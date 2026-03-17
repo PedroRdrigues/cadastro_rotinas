@@ -1,6 +1,6 @@
-from _database import InterfaceError, DB
-from _emails import Email
-from _utils import notify_error, check_and_update_log_file, RoutineData, convert_word_to_html
+from ._database import InterfaceError, DB
+from ._emails import Email
+from ._utils import notify_error, check_and_update_log_file, RoutineData, convert_word_to_html
 
 from datetime import datetime as dt
 from pathlib import Path
@@ -243,7 +243,6 @@ class RoutineService:
             # Pega o caminho absoluto de todos os arquivos na pasta da rotina
             anexos = [str(p) for p in anexos_dir.glob("*")] if anexos_dir.exists() else []
             corpos, hiperlinks = self._get_corpos(routine.id)
-            print(anexos)
 
             Email(
                 user=getenv("EMAIL_INFORMATIVO_USER"),

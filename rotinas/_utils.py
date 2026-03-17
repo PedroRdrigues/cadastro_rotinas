@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from typing import Optional
 from mammoth import convert_to_html
 
-from _emails import Email
-from _database import DB
+from ._emails import Email
+from ._database import DB
 
 base_path = Path.cwd()
 
