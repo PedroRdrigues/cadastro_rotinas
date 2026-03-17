@@ -10,7 +10,7 @@ Um motor de execução de rotinas robusto que transforma scripts em serviços re
 - [Estrutura de Tipos](#estrutura-de-tipos)
 
 
-## 🚀 Funcionalidades
+## Funcionalidades
 
 - **Serviço Windows:** Execução contínua em segundo plano via NSSM.
 - **Multithreading:** Processamento paralelo de rotinas para evitar gargalos.
@@ -22,7 +22,7 @@ Um motor de execução de rotinas robusto que transforma scripts em serviços re
 
 - **Notificação Automática:** Sistema de mailing integrado pós-execução.
 
-## 🛠️ Arquitetura do Banco de Dados
+## Arquitetura do Banco de Dados
 
 O serviço baseia-se em três tabelas principais:
 
@@ -52,7 +52,7 @@ O serviço baseia-se em três tabelas principais:
 - `hiper_link` : Link que será vinculado à imagem dentro do corpo do informativo;
 - `corpo` : Nome do arquivo de imagem com a extensão. **(OBRIGATÓRIO)**.
 
-## ⚙️ Como Funciona
+## Como Funciona
 
 O fluxo de operação segue o ciclo abaixo:
 
@@ -63,7 +63,7 @@ O fluxo de operação segue o ciclo abaixo:
 
 _Obs: Caso a rotina seja do tipo **IN** a tabela `estrutura_informativo` é consultada para verificar a organização das imagens no corpo do e-mail._
 
-## 💻 Instalação e Configuração
+## Instalação e Configuração
 
 ### Pré-requisitos
 
@@ -92,7 +92,7 @@ nssm start RotinasService
 
 
 
-## 📊 Estrutura de Tipos
+## Estrutura de Tipos
 
 | Tipo | Descrição                                                | Ação Pós-Execução                |
 | --- |----------------------------------------------------------|----------------------------------|
