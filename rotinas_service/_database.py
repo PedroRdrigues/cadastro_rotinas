@@ -2,7 +2,7 @@
 
 import logging
 from os import getenv
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 try:
     import oracledb

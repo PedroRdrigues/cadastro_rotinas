@@ -77,7 +77,7 @@ class RoutineService:
             self.release_lock()
 
     def check_routines(self):
-        # logging.info("Verificando rotinas pendentes...")
+        # logging.info("Verificando rotinas_service pendentes...")
         check_and_update_log_file()
         try:
             rows = self.db.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
@@ -86,7 +86,7 @@ class RoutineService:
                 routine = RoutineData.from_row(row)
                 Thread(target=self.process_routine, args=(routine,), daemon=True).start()
         except Exception as e:
-            logging.error(f"Erro ao buscar rotinas: {e}")
+            logging.error(f"Erro ao buscar rotinas_service: {e}")
             notify_error(e, "Busca por Rotinas")
 
     def process_routine(self, routine: RoutineData):
