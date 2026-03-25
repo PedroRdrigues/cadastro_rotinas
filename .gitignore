@@ -2,9 +2,9 @@
 /rotinas.sqlite
 /service.lock
 /teste.py
-/planilhas/*
-/informativo/anexos/*
-/informativo/corpos/*
+/src/planilhas/*
+/src/informativo/anexos/*
+/src/informativo/corpos/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -222,4 +222,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-/SQL/
+/src/SQL/

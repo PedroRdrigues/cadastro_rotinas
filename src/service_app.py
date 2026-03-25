@@ -1,7 +1,7 @@
 import logging
 import sys
 from dotenv import load_dotenv
-from rotinas_service import RoutineService, check_and_update_log_file, create_essential_folders
+from src.rotinas_service import RoutineService, check_and_update_log_file, create_essential_folders
 
 check_and_update_log_file()
 

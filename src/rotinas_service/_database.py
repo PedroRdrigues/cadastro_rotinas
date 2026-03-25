@@ -31,7 +31,7 @@ class DB:
             cls._instance = super(DB, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, user: str =DB_USER, password: str = DB_PASS, dsn: str = DB_DSN) -> None:
         """Inicializa o Pool de Conexões Oracle."""
         if self._initialized:
             return
@@ -39,9 +39,9 @@ class DB:
         try:
             # O Pool gerencia as conexões automaticamente, evitando 'Timed Out'
             self._pool = create_pool(
-                user=DB_USER,
-                password=DB_PASS,
-                dsn=DB_DSN,
+                user=user,
+                password=password,
+                dsn=dsn,
                 min=2,
                 max=10,
                 increment=1
