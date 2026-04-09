@@ -29,7 +29,10 @@ class Email:
             hyperlink: Optional[dict[str, Any]] = None
     ) -> None:
         self._host = getenv("EMAIL_HOST")
-        self._port = int(getenv("EMAIL_PORT"))
+        port_env = getenv("EMAIL_PORT")
+        if not port_env:
+            raise ValueError("Variável de ambiente EMAIL_PORT não definida.")
+        self._port = int(port_env)
         self._user = user or getenv("EMAIL_DEFAULT_USER")
         self._password = password or getenv("EMAIL_DEFAULT_PASSWORD")
 
@@ -88,7 +91,7 @@ class Email:
                 else:
                     html = "<html><body>"
                     for i, path_img in enumerate(self.corpo_arq):
-                        link = self.hyperlink[Path(path_img).name]
+                        link = self.hyperlink.get(Path(path_img).name)
                         if link:
                             html += f'<a href={link}><img src="cid:image{i}" alt="Imagem {i}"></a><br>'
                         else:
@@ -122,7 +125,10 @@ class Email:
                 if code != 334:
                     raise PermissionError(f"Servidor recusou AUTH LOGIN: {resp}")
 
-                server.docmd(user_b64)
+                code, resp = server.docmd(user_b64)
+                if code != 334:
+                    raise PermissionError(f"Servidor recusou o usuário no AUTH LOGIN: {resp}")
+
                 code, resp = server.docmd(pass_b64)
 
                 if code != 235:
