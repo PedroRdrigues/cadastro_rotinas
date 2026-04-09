@@ -29,10 +29,13 @@ class RoutineData:
 
     @classmethod
     def from_row(cls, row):
+        # row[8] e row[9] são colunas não utilizadas neste mapeamento
+        sql_raw = row[7]
         return cls(
             id=row[0], nome=row[1], periodo=row[2], intervalo=row[3],
             dta_inicial=row[4], dta_proxima=row[5], dta_final=row[6],
-            sql=str(row[7]).upper(), tipo=row[10]
+            sql=str(sql_raw).upper() if sql_raw else None,
+            tipo=row[10]
         )
 
 def setup_logging(log_file):
@@ -135,13 +138,19 @@ def create_essential_folders():
     corpos_dir.mkdir(exist_ok=True)
 
 
-def convert_word_to_html(input_path):
+def convert_word_to_html(input_path: str) -> str:
+    """Converte um arquivo .docx ou .doc para HTML e salva no mesmo diretório."""
     with open(input_path, "rb") as docx_file:
         result = convert_to_html(docx_file)
-        html = result.value  # O HTML gerado
-        messages = result.messages  # Mensagens de aviso, se houver
+        html = result.value
 
-    output_path = input_path.replace("docx" or "doc", "html")
+        if result.messages:
+            for msg in result.messages:
+                logging.warning(f"Aviso na conversão Word→HTML: {msg}")
+
+    # Substitui corretamente a extensão independente de ser .docx ou .doc
+    p = Path(input_path)
+    output_path = str(p.with_suffix(".html"))
 
     with open(output_path, "w", encoding="utf-8") as html_file:
         html_file.write(html)

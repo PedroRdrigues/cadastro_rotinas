@@ -89,11 +89,12 @@ class DB:
                         cursor.execute(sql, params)
                     else:
                         cursor.execute(sql)
+                    print(sql, params)
                     connection.commit()
                     return True
         except Exception as e:
             logging.error(f"Erro ao executar comando SQL (Commit cancelado): {e}")
-            return False
+            raise Exception(f"Erro ao executar comando SQL (Commit cancelado): {e}") from e
 
 if __name__ == "__main__":
     pass
