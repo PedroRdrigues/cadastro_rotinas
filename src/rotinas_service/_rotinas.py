@@ -211,8 +211,6 @@ class RoutineService:
 
             sql_update = sql_map.get(routine.periodo)
             if sql_update:
-                print(sql_update,
-                                 [dta_agendada, routine.intervalo, routine.id])
                 self.db.executar(sql_update,
                                  [dta_agendada, routine.intervalo, routine.id])
                 logging.info(f"Rotina '{routine.nome}' (ID: {routine.id}) reagendada.")
@@ -291,7 +289,6 @@ class RoutineService:
     def _handle_job(self, routine: RoutineData):
         try:
             self.db.executar(routine.sql)
-            logging.warning(f"---[ ROTINA JOB '{routine.nome}': ID {routine.id} ]---")
         except Exception as e:
             raise Exception(f"Erro ao executar comando JOB: {e}") from e
 

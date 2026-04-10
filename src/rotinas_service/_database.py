@@ -89,7 +89,7 @@ class DB:
                         cursor.execute(sql, params)
                     else:
                         cursor.execute(sql)
-                    print(sql, params)
+
                     connection.commit()
                     return True
         except Exception as e:
