@@ -2,7 +2,7 @@
 
 import logging
 from os import getenv
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 try:
     import oracledb
@@ -89,11 +89,12 @@ class DB:
                         cursor.execute(sql, params)
                     else:
                         cursor.execute(sql)
+
                     connection.commit()
                     return True
         except Exception as e:
             logging.error(f"Erro ao executar comando SQL (Commit cancelado): {e}")
-            return False
+            raise Exception(f"Erro ao executar comando SQL (Commit cancelado): {e}") from e
 
 if __name__ == "__main__":
     pass

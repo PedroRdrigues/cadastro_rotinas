@@ -63,7 +63,7 @@ class RoutineService:
         scheduler.add_job(
             self.check_routines,
             'cron',
-            second='0',
+            # second='0',
             misfire_grace_time=15,
             coalesce=True
         )
@@ -77,7 +77,7 @@ class RoutineService:
             self.release_lock()
 
     def check_routines(self):
-        # logging.info("Verificando rotinas pendentes...")
+        # logging.info("Verificando rotinas_service pendentes...")
         check_and_update_log_file()
         try:
             rows = self.db.consultar(getenv("SQL_ROUTINES_TO_EXECUTE"))['data']
@@ -86,7 +86,7 @@ class RoutineService:
                 routine = RoutineData.from_row(row)
                 Thread(target=self.process_routine, args=(routine,), daemon=True).start()
         except Exception as e:
-            logging.error(f"Erro ao buscar rotinas: {e}")
+            logging.error(f"Erro ao buscar rotinas_service: {e}")
             notify_error(e, "Busca por Rotinas")
 
     def process_routine(self, routine: RoutineData):
@@ -106,7 +106,9 @@ class RoutineService:
                 elif routine.tipo == 'IN':
                     self._handle_info(routine)
                 elif routine.tipo == 'TRG':
-                    self._hendle_trigger(routine)
+                    self._handle_trigger(routine)
+                elif routine.tipo == 'JOB':
+                    self._handle_job(routine)
 
                 # Finalização e Reagendamento
                 self.db.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
@@ -120,61 +122,45 @@ class RoutineService:
                 notify_error(e, routine)
 
     def _get_hiperlink(self, id_routine: int) -> dict[str, Any]:
-       return {
-                h[0]: h[1] for h in self.db.consultar(
-                    getenv("SQL_GET_HIPERLINK"),
-                    [id_routine]
-                )['data']
-            }
+        return {
+            h[0]: h[1] for h in self.db.consultar(
+                getenv("SQL_GET_HIPERLINK"),
+                [id_routine]
+            )['data']
+        }
 
     def _get_recipient(self, id_routine: int) -> List[str]:
         return [
-                    r[0] for r in self.db.consultar(
-                        getenv("SQL_GET_RECIPIENTS"), [id_routine]
-                    )['data']
-                ]
-
-    def _get_column_names(self, sql: str) -> List[str]:
-        """Extrai nomes de colunas dos metadados da consulta."""
-        try:
-            # Pegamos a descrição do cursor que o seu _database agora retorna
-            result = self.db.consultar(sql)
-            if result and 'description' in result:
-                return [c[0] for c in result['description']]
-            return []
-        except Exception as e:
-            logging.error(f"Erro ao obter colunas: {e}")
-            return []
+            r[0] for r in self.db.consultar(
+                getenv("SQL_GET_RECIPIENTS"), [id_routine]
+            )['data']
+        ]
 
     def _get_corpos(self, routine_id):
         base_info = self.base_path / "informativo"
         nome = f"rotina_{routine_id}"
 
-        corpos_dir = base_info / "corpos"
-        corpos_dir.mkdir(exist_ok=True)
         corpos_dir = base_info / "corpos" / nome
+        corpos_dir.mkdir(parents=True, exist_ok=True)
 
         # Mapeia todos os arquivos dentro do diretório da rotina
         corpos = [str(p) for p in corpos_dir.glob("*")] if corpos_dir.exists() else []
 
-        # Cria um dicionário com os hiperlink de cada imagem(caso tenha)
+        # Cria um dicionário com os hiperlinks de cada imagem (caso tenha)
         hiperlinks = self._get_hiperlink(routine_id)
 
-        # Verifica quais arquivos estão no banco e localmente para que não sejam enviados arquivos indesejados
-        arq_banco = list(hiperlinks.keys())
-        corpos = [
-            a for a in corpos if Path(a).name in arq_banco
-        ]
+        # Filtra apenas os arquivos que estão cadastrados no banco
+        arq_banco = set(hiperlinks.keys())
+        corpos = [a for a in corpos if Path(a).name in arq_banco]
 
-        # Verifica se existe algum aquivo word.
-        arq = next((a for a in corpos if a.endswith(".docx") or a.endswith(".doc")), corpos)
-        if isinstance(arq, str):
-            arq = convert_word_to_html(arq)
+        # Se houver um arquivo Word, converte para HTML e usa apenas ele como corpo
+        arq_word = next((a for a in corpos if a.endswith(".docx") or a.endswith(".doc")), None)
+        if arq_word:
+            arq_html = convert_word_to_html(arq_word)
+            return [arq_html], hiperlinks
 
-        corpos = [arq] if isinstance(arq, str) else corpos
-
-        # Mapeia as posições de cada arquiv/imagem com base na ordem estabelecida no banco e organiza os arquivos locais dentro do corpo.
-        posicoes = {nome: i for i, nome in enumerate(hiperlinks.keys())}
+        # Organiza as imagens/arquivos restantes pela ordem definida no banco
+        posicoes = {nome_arq: i for i, nome_arq in enumerate(hiperlinks.keys())}
         corpos_organizados = sorted(
             corpos,
             key=lambda x: posicoes.get(Path(x).name, len(posicoes))
@@ -183,25 +169,22 @@ class RoutineService:
         return corpos_organizados, hiperlinks
 
     def _create_excel(self, colunas, conteudo, nome_rotina) -> Path:
-        try:
-            wb = Workbook()
-            ws = wb.active
-            ws.append(colunas)
-            for row in conteudo:
-                ws.append(row)
+        wb = Workbook()
+        ws = wb.active
+        ws.append(colunas)
+        for row in conteudo:
+            ws.append(row)
 
-            folder = self.base_path / "planilhas"
-            folder.mkdir(exist_ok=True)
+        folder = self.base_path / "planilhas"
+        folder.mkdir(exist_ok=True)
 
-            # Sanitização de nome de arquivo
-            clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
-            clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
+        # Sanitização de nome de arquivo
+        clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
+        clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
 
-            file_path = folder / f"{clean_name}.xlsx"
-            wb.save(file_path)
-            return file_path
-        except Exception as e:
-            raise e
+        file_path = folder / f"{clean_name}.xlsx"
+        wb.save(file_path)
+        return file_path
 
     def _reschedule(self, routine: RoutineData, dta_agendada: dt, agora: dt):
         """Calcula e atualiza a próxima execução."""
@@ -212,16 +195,27 @@ class RoutineService:
 
             # Mapeamento de SQLs de update por período
             sql_map = {
+                'S': getenv("SQL_UPDATE_SCHEDULE_SECOND"),
                 'Mi': getenv("SQL_UPDATE_SCHEDULE_MINUTE"),
                 'H': getenv("SQL_UPDATE_SCHEDULE_HOUR"),
                 'D': getenv("SQL_UPDATE_SCHEDULE_DAY"),
                 'M': getenv("SQL_UPDATE_SCHEDULE_MONTH")
             }
+            periodo_map = {
+                "S": 'SECOND',
+                "Mi": 'MINUTE',
+                "H": 'HOUR',
+                "D": 'DAY',
+                "M": 'HOUR',
+            }
 
             sql_update = sql_map.get(routine.periodo)
             if sql_update:
-                self.db.executar(sql_update, [dta_agendada, routine.intervalo, routine.id])
-                logging.info(f"Rotina {routine.nome} (ID: {routine.id}) reagendada.")
+                self.db.executar(sql_update,
+                                 [dta_agendada, routine.intervalo, routine.id])
+                logging.info(f"Rotina '{routine.nome}' (ID: {routine.id}) reagendada.")
+            else:
+                logging.warning(f"A variável de ambiente 'SQL_UPDATE_SCHEDULE' não foi definida.")
         except Exception as e:
             raise Exception(f"Erro ao reagendar a rotina: {e}")
 
@@ -255,14 +249,15 @@ class RoutineService:
             ).enviar()
 
         except Exception as e:
-            raise e
+            raise Exception(f"Erro ao processar informativo '{routine.nome}': {e}") from e
 
     def _handle_report(self, routine: RoutineData):
         """Lógica de geração e envio de relatório Excel."""
         try:
-            # Executa a query principal
-            dados = self.db.consultar(routine.sql)['data']
-            # logging.info(f"Dados do db: {dados}")
+            # Consulta única: reutiliza dados e metadados para evitar segunda ida ao banco
+            result = self.db.consultar(routine.sql)
+            dados = result['data']
+            colunas = [c[0] for c in result['description']] if result.get('description') else []
 
             # Processamento de datas para exibição no Excel
             dados_formatados = []
@@ -275,12 +270,8 @@ class RoutineService:
                         nova_linha.append(val.strftime("%d/%m/%Y"))
                     else:
                         nova_linha.append(val)
-
                 dados_formatados.append(nova_linha)
 
-            # Para as colunas, o ideal é que sua classe DB retorne o cursor.description
-            # Aqui mantive a lógica de busca por tabela, mas simplificada
-            colunas = self._get_column_names(routine.sql)
             path_excel = self._create_excel(colunas, dados_formatados, routine.nome)
             destinatarios = self._get_recipient(routine.id)
             Email(
@@ -290,11 +281,17 @@ class RoutineService:
                 anexos=[str(path_excel)]
             ).enviar()
         except Exception as e:
-            raise e
+            raise Exception(f"Erro ao processar relatório '{routine.nome}': {e}") from e
 
-    def _hendle_trigger(self, routine: RoutineData):
+    def _handle_trigger(self, routine: RoutineData):
         logging.info(f"---[ ROTINA TRIGGER '{routine.nome}': ID {routine.id} ]---")
+
+    def _handle_job(self, routine: RoutineData):
+        try:
+            self.db.executar(routine.sql)
+        except Exception as e:
+            raise Exception(f"Erro ao executar comando JOB: {e}") from e
 
 
 if __name__ == "__main__":
-    print("---[ USAR O ARQUIVO MAIN.PY ]---")
+    print("---[ USAR O ARQUIVO SERVICE_APP.PY ]---")
