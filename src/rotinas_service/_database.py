@@ -8,13 +8,13 @@ try:
     import oracledb
     from oracledb import create_pool, InterfaceError
 except ImportError:
-    logging.error("Biblioteca 'oracledb' não instalada. Execute: pip install oracledb")
+    logging.critical("Biblioteca 'oracledb' não instalada. Execute: pip install oracledb")
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    logging.warning("Biblioteca 'python-dotenv' não instalada. Certifique-se de que as variáveis de ambiente estão configuradas.")
+    logging.critical("Biblioteca 'python-dotenv' não instalada. Certifique-se de que as variáveis de ambiente estão configuradas.")
 
 # Configurações do Banco vindas do .env
 DB_USER = getenv("DB_USER")

@@ -18,7 +18,7 @@ try:
     from openpyxl import Workbook
     from apscheduler.schedulers.blocking import BlockingScheduler
 except ImportError as e:
-    logging.error(f"Dependência faltando: {e}")
+    logging.critical(f"Dependência faltando: {e}")
 
 
 class RoutineService:
