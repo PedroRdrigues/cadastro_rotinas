@@ -1,10 +1,10 @@
 /cadastro_rotinas.7z
 /rotinas.sqlite
 src/service.lock
-/teste.py
-/planilhas/
-/informativo/
-/logs/
+src/teste.py
+/src/planilhas/
+src/informativo/
+src/logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
