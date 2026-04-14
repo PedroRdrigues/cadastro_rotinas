@@ -98,7 +98,7 @@ class RoutineService:
                 logging.info(f"Iniciando: {routine.nome} (ID: {routine.id})")
 
                 # Status: Executando
-                self.db.executar(getenv("SQL_UPDATE_SET_TO_E_N"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_EXECUTE"), [routine.id])
 
                 # Dispatcher de tipos
                 if routine.tipo == 'RE':
@@ -111,7 +111,7 @@ class RoutineService:
                     self._handle_job(routine)
 
                 # Finalização e Reagendamento
-                self.db.executar(getenv("SQL_UPDATE_SET_TO_F_S"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_FINISHED"), [routine.id])
                 self._reschedule(routine, dta_agendada, agora)
 
                 logging.info(f"Sucesso:  {routine.nome} (ID: {routine.id})")
@@ -221,6 +221,9 @@ class RoutineService:
 
     def _handle_info(self, routine: RoutineData):
         try:
+            # Exclui os e-mails de funcionários inativos dentro de u
+            self.db.executar(getenv("SQL_DELETE_INATIVE_EMAILS"))
+
             nome = f"rotina_{routine.id}"
 
             # Mapeia a pasta de informativos as sub pastas
