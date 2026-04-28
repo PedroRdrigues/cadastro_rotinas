@@ -59,6 +59,10 @@ class DB:
         - 'description': Metadados das colunas
         """
         try:
+            query = query.strip()
+            if query[-1] == ';':
+                query = query[:-1]
+
             with self._pool.acquire() as connection:
                 with connection.cursor() as cursor:
                     if params:

@@ -148,14 +148,12 @@ class RoutineService:
                 self._remove_job(rid)
                 self._add_job(routine)
 
-    def _intervalo_segundos(self, routine: RoutineData) -> int|None:
+    def _intervalo_segundos(self, routine: RoutineData) -> int | None:
         """Converte período + intervalo da rotina para segundos (usado como chave de comparação)."""
         if routine.periodo == 'U':
-            self.db.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"),[ routine.id])
             return None
-        else:
-            mult = {'S': 1, 'Mi': 60, 'H': 3600, 'D': 86400, 'M': 2592000}
-            return mult.get(routine.periodo, 60) * (routine.intervalo or 1)
+        mult = {'S': 1, 'Mi': 60, 'H': 3600, 'D': 86400, 'M': 2592000}
+        return mult.get(routine.periodo, 60) * (routine.intervalo or 1)
 
     def _make_trigger(self, routine: RoutineData) -> IntervalTrigger:
         """Cria um IntervalTrigger com base no período e intervalo da rotina."""
@@ -231,7 +229,11 @@ class RoutineService:
 
             self.db.executar(getenv("SQL_UPDATE_SET_TO_FINISHED"), [routine.id])
 
-            # Atualiza o objeto da rotina no job com os dados mais recentes do banco
+            # Atualiza dta_proxima no banco para todos os tipos exceto JOB
+            if routine.tipo != 'JOB':
+                self._reschedule(routine)
+
+            # Recarrega o objeto da rotina no job com os dados mais recentes do banco
             self._refresh_job(routine)
 
             logger.info(f"Sucesso: '{routine.nome}' (ID: {routine.id})")
@@ -240,6 +242,47 @@ class RoutineService:
             logger.error(f"Falha na rotina {routine.id} '{routine.nome}': {e}")
             self.db.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
             notify_error(e, routine)
+
+    def _reschedule(self, routine: RoutineData):
+        """
+        Calcula e grava a próxima data de execução no banco.
+        Chamado após toda execução bem-sucedida, exceto para rotinas do tipo JOB.
+
+        Para período 'U' (único) ou quando dta_final foi atingida, desativa a rotina
+        e remove o job do scheduler.
+        """
+        logger = get_logger()
+        agora = dt.now()
+
+        try:
+            if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
+                self.db.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
+                self._remove_job(routine.id)
+                logger.info(f"Rotina '{routine.nome}' (ID: {routine.id}) desativada após execução única/final.")
+                return
+
+            sql_map = {
+                'S':  getenv("SQL_UPDATE_SCHEDULE_SECOND"),
+                'Mi': getenv("SQL_UPDATE_SCHEDULE_MINUTE"),
+                'H':  getenv("SQL_UPDATE_SCHEDULE_HOUR"),
+                'D':  getenv("SQL_UPDATE_SCHEDULE_DAY"),
+                'M':  getenv("SQL_UPDATE_SCHEDULE_MONTH"),
+            }
+
+            sql_update = sql_map.get(routine.periodo)
+            if sql_update:
+                # Usa dta_proxima (ou dta_inicial) como base do cálculo para que
+                # atrasos na execução não acumulem deriva no agendamento.
+                base = agora.replace(second=0, microsecond=0) #  routine.dta_proxima or routine.dta_inicial
+                self.db.executar(sql_update, [base, routine.intervalo, routine.id])
+                logger.info(f"dta_proxima atualizada: '{routine.nome}' (ID: {routine.id})")
+            else:
+                logger.warning(
+                    f"Período '{routine.periodo}' sem SQL de reagendamento definido "
+                    f"(rotina ID: {routine.id})."
+                )
+        except Exception as e:
+            raise Exception(f"Erro ao reagendar rotina '{routine.nome}': {e}") from e
 
     def _refresh_job(self, routine: RoutineData):
         """
@@ -303,17 +346,33 @@ class RoutineService:
         )
         return corpos_organizados, hiperlinks
 
-    def _create_excel(self, colunas, conteudo, nome_rotina) -> Path:
+    def _create_excel(self, result: dict, routine: RoutineData) -> Path:
+        colunas = [c[0] for c in result['description']] if result.get('description') else []
+
+        dados_formatados = []
+        for linha in result['data']:
+            nova_linha = []
+            for val in linha:
+                if isinstance(val, dt) and val.strftime("%H:%M:%S") != "00:00:00":
+                    nova_linha.append(val.strftime("%d/%m/%Y %H:%M:%S"))
+                elif isinstance(val, dt):
+                    nova_linha.append(val.strftime("%d/%m/%Y"))
+                else:
+                    nova_linha.append(val)
+            dados_formatados.append(nova_linha)
+
         wb = Workbook()
         ws = wb.active
         ws.append(colunas)
-        for row in conteudo:
+        for row in dados_formatados:
             ws.append(row)
 
         folder = self.base_path / "planilhas"
         folder.mkdir(exist_ok=True)
 
-        clean_name = normalize('NFD', nome_rotina.lower().replace(' ', '_'))
+
+
+        clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
         clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
 
         file_path = folder / f"{clean_name}.xlsx"
@@ -351,34 +410,27 @@ class RoutineService:
         """Geração e envio de relatório Excel."""
         try:
             result = self.db.consultar(routine.sql)
-            dados = result['data']
-            colunas = [c[0] for c in result['description']] if result.get('description') else []
-
-            dados_formatados = []
-            for linha in dados:
-                nova_linha = []
-                for val in linha:
-                    if isinstance(val, dt) and val.strftime("%H:%M:%S") != "00:00:00":
-                        nova_linha.append(val.strftime("%d/%m/%Y %H:%M:%S"))
-                    elif isinstance(val, dt):
-                        nova_linha.append(val.strftime("%d/%m/%Y"))
-                    else:
-                        nova_linha.append(val)
-                dados_formatados.append(nova_linha)
-
-            path_excel = self._create_excel(colunas, dados_formatados, routine.nome)
+            path_excel = self._create_excel(result, routine)
             destinatarios = self._get_recipient(routine.id)
             Email(
                 para=destinatarios,
                 titulo=f"Relatório - {routine.nome}",
-                corpo_texto="Segue em anexo o relatório solicitado.",
+                corpo_texto="Segue em anexo o relatório solicitado."
+                            "\n\nEste é um e-mail automático, favor não responder."
+                            "\n\nAtenciosamente, Departamento de TI.",
                 anexos=[str(path_excel)]
             ).enviar()
         except Exception as e:
             raise Exception(f"Erro ao processar relatório '{routine.nome}': {e}") from e
 
     def _handle_trigger(self, routine: RoutineData):
-        get_logger().info(f"---[ ROTINA TRIGGER '{routine.nome}': ID {routine.id} ]---")
+        try:
+            result = self.db.consultar(routine.sql)
+            if not result['data'] == []:
+                self._handle_report(routine)
+
+        except Exception as e:
+            raise Exception(f"Erro ao processar trigger '{routine.nome}': {e} ") from e
 
     def _handle_job(self, routine: RoutineData):
         try:

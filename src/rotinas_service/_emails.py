@@ -22,7 +22,7 @@ class Email:
             password: Optional[str] = None,
             para: Optional[List[str]|str] = None,
             cco: Optional[List[str]|str] = None,
-            anexos: Optional[List[str]] = None,
+            anexos: Optional[List[str|Path]] = None,
             titulo: str = "Sem Assunto",
             corpo_texto: Optional[str] = None,
             corpo_arq: Optional[List[str]] = None,
