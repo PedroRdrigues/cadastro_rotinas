@@ -1,6 +1,5 @@
 """Módulo de envio de e-mails via SMTP_SSL com suporte a imagens inline (cid)."""
 
-import logging
 import smtplib
 from base64 import b64encode
 from email import encoders
@@ -14,19 +13,21 @@ from pathlib import Path
 from time import sleep
 from typing import List, Optional, Any
 
+from ._utils import get_logger
+
 
 class Email:
     def __init__(
         self,
-            user: Optional[str] = None,
-            password: Optional[str] = None,
-            para: Optional[List[str]|str] = None,
-            cco: Optional[List[str]|str] = None,
-            anexos: Optional[List[str|Path]] = None,
-            titulo: str = "Sem Assunto",
-            corpo_texto: Optional[str] = None,
-            corpo_arq: Optional[List[str]] = None,
-            hyperlink: Optional[dict[str, Any]] = None
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        para: Optional[List[str] | str] = None,
+        cco: Optional[List[str] | str] = None,
+        anexos: Optional[List[str | Path]] = None,
+        titulo: str = "Sem Assunto",
+        corpo_texto: Optional[str] = None,
+        corpo_arq: Optional[List[str]] = None,
+        hyperlink: Optional[dict[str, Any]] = None,
     ) -> None:
         self._host = getenv("EMAIL_HOST")
         port_env = getenv("EMAIL_PORT")
@@ -35,7 +36,6 @@ class Email:
         self._port = int(port_env)
         self._user = user or getenv("EMAIL_DEFAULT_USER")
         self._password = password or getenv("EMAIL_DEFAULT_PASSWORD")
-
 
         if not para and not cco:
             raise ValueError("É necessário informar ao menos um destinatário (para ou cco).")
@@ -48,7 +48,6 @@ class Email:
         self.corpo_arq = corpo_arq or []
         self.hyperlink = hyperlink or {}
 
-        # Objeto da mensagem
         self.msg = MIMEMultipart()
         self._montar_cabecalho()
         self._montar_corpo()
@@ -65,7 +64,7 @@ class Email:
     def _montar_corpo(self):
         """Processa anexos, textos e imagens inline (informativos)."""
         try:
-            # 1. Anexos de Arquivos (Excel, etc)
+            # 1. Anexos de arquivos (Excel, etc.)
             for caminho in self.anexos:
                 path_anexo = Path(caminho)
                 if path_anexo.exists():
@@ -76,17 +75,16 @@ class Email:
                     part.add_header('Content-Disposition', f'attachment; filename={path_anexo.name}')
                     self.msg.attach(part)
 
-            # 2. Corpo de Texto Simples
+            # 2. Corpo de texto simples
             if self.corpo_texto:
                 self.msg.attach(MIMEText(self.corpo_texto, 'plain'))
 
-            # 3. Informativos (Imagens Inline)
+            # 3. Informativos (imagens inline ou HTML)
             elif self.corpo_arq:
-                arq_html =  next((a for a in self.corpo_arq if a.endswith(".html")), None)
+                arq_html = next((a for a in self.corpo_arq if a.endswith(".html")), None)
                 if arq_html:
                     with open(arq_html, 'r', encoding='utf-8') as f:
                         html = f.read()
-
                     self.msg.attach(MIMEText(html, 'html'))
                 else:
                     html = "<html><body>"
@@ -107,20 +105,18 @@ class Email:
                                 mime_img.add_header('Content-Disposition', 'inline', filename=path_img.name)
                                 self.msg.attach(mime_img)
         except Exception as e:
-            logging.error(f"Erro ao montar estrutura do e-mail: {e}")
+            get_logger().error(f"Erro ao montar estrutura do e-mail: {e}")
             raise
 
     def enviar(self) -> bool:
         """Realiza a autenticação manual e envia o e-mail."""
         try:
-            # Codificação para AUTH LOGIN
             user_b64 = b64encode(self._user.encode('utf-8')).decode('ascii')
             pass_b64 = b64encode(self._password.encode('utf-8')).decode('ascii')
 
             with smtplib.SMTP_SSL(self._host, self._port) as server:
                 server.ehlo()
 
-                # Autenticação manual via comandos SMTP
                 code, resp = server.docmd("AUTH", "LOGIN")
                 if code != 334:
                     raise PermissionError(f"Servidor recusou AUTH LOGIN: {resp}")
@@ -130,13 +126,12 @@ class Email:
                     raise PermissionError(f"Servidor recusou o usuário no AUTH LOGIN: {resp}")
 
                 code, resp = server.docmd(pass_b64)
-
                 if code != 235:
                     raise PermissionError(f"Autenticação recusada: {resp}")
 
                 server.send_message(self.msg)
 
-            logging.info(f"E-mail '{self.titulo}' enviado para os destinatarios")
+            get_logger().info(f"E-mail '{self.titulo}' enviado para os destinatarios")
             sleep(1)
             return True
 

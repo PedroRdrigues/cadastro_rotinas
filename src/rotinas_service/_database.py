@@ -1,6 +1,5 @@
 """Manipulação de banco de dados Oracle utilizando python-oracledb."""
 
-import logging
 from os import getenv
 from typing import Any, Dict, Optional
 
@@ -8,23 +7,27 @@ try:
     import oracledb
     from oracledb import create_pool, InterfaceError
 except ImportError:
+    import logging
     logging.critical("Biblioteca 'oracledb' não instalada. Execute: pip install oracledb")
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
+    import logging
     logging.critical("Biblioteca 'python-dotenv' não instalada. Certifique-se de que as variáveis de ambiente estão configuradas.")
+
+from ._utils import get_logger
 
 # Configurações do Banco vindas do .env
 DB_USER = getenv("DB_USER")
 DB_PASS = getenv("DB_PASS")
 DB_DSN = getenv("DB_DSN")
 
+
 class DB:
     _instance = None
     _initialized = False
-
 
     def __new__(cls):
         if cls._instance is None:
@@ -37,7 +40,6 @@ class DB:
             return
 
         try:
-            # O Pool gerencia as conexões automaticamente, evitando 'Timed Out'
             self._pool = create_pool(
                 user=DB_USER,
                 password=DB_PASS,
@@ -46,22 +48,20 @@ class DB:
                 max=10,
                 increment=1
             )
-            logging.info("Pool de conexões Oracle estabelecido com sucesso.")
+            get_logger().info("Pool de conexões Oracle estabelecido com sucesso.")
             self._initialized = True
         except Exception as e:
-            logging.critical(f"Falha crítica ao conectar no Banco: {e}")
+            get_logger().critical(f"Falha crítica ao conectar no Banco: {e}")
             raise
 
-    def consultar(self, query: str, params: Optional[list|tuple] = None) -> Dict[str, Any]:
+    def consultar(self, query: str, params: Optional[list | tuple] = None) -> Dict[str, Any]:
         """
         Executa uma consulta e retorna um dicionário com:
         - 'data': Lista de linhas consultadas (cada registro é uma lista)
         - 'description': Metadados das colunas
         """
         try:
-            query = query.strip()
-            if query[-1] == ';':
-                query = query[:-1]
+            query = query.strip().rstrip(';')
 
             with self._pool.acquire() as connection:
                 with connection.cursor() as cursor:
@@ -70,22 +70,16 @@ class DB:
                     else:
                         cursor.execute(query)
 
-                    # description com o nome das colunas e tipos
                     description = cursor.description
-
-                    # Converte tuplas em listas para manter compatibilidade com o processamento de Excel
                     data = [list(row) for row in cursor.fetchall()]
 
-                    return {
-                        "data": data,
-                        "description": description
-                    }
+                    return {"data": data, "description": description}
         except Exception as e:
-            logging.error(f"Erro ao executar consulta SQL: {e}")
+            get_logger().error(f"Erro ao executar consulta SQL: {e}")
             raise Exception(f"Erro ao executar consulta SQL: {e}")
 
-    def executar(self, sql: str, params: Optional[list|tuple] = None) -> bool:
-        """Executa comandos SQL."""
+    def executar(self, sql: str, params: Optional[list | tuple] = None) -> bool:
+        """Executa comandos SQL (INSERT, UPDATE, DELETE, etc.)."""
         try:
             with self._pool.acquire() as connection:
                 with connection.cursor() as cursor:
@@ -93,12 +87,12 @@ class DB:
                         cursor.execute(sql, params)
                     else:
                         cursor.execute(sql)
-
                     connection.commit()
                     return True
         except Exception as e:
-            logging.error(f"Erro ao executar comando SQL (Commit cancelado): {e}")
+            get_logger().error(f"Erro ao executar comando SQL (Commit cancelado): {e}")
             raise Exception(f"Erro ao executar comando SQL (Commit cancelado): {e}") from e
+
 
 if __name__ == "__main__":
     pass

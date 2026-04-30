@@ -7,10 +7,8 @@ from os import getenv
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
-from mammoth import convert_to_html
 
-from ._emails import Email
-from ._database import DB
+from mammoth import convert_to_html
 
 base_path = Path.cwd()
 
@@ -95,33 +93,49 @@ def check_and_update_log_file():
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / f"service_{dt.now().strftime('%Y-%m')}.log"
 
-    # Se o arquivo NÃO existe (virada de mês)
-    # OU se o logger da aplicação ainda não tem handlers (primeira execução)
     app_logger = get_logger()
     if not log_file.exists() or not app_logger.hasHandlers():
         app_logger.info(f"Configurando novo arquivo de log: {log_file.name}")
         setup_logging(log_file)
 
 
-def attempt_error(id_rotina: int) -> bool | None:
+def attempt_error(id_rotina: int) -> tuple[int, bool]:
     """
-    Verifica a quantidade de tentativas com erro.
-    Se o valor for maior ou igual ao limite, a rotina é inativada
-    e o contador é zerado.
+    Incrementa o contador de tentativas com erro da rotina e retorna o estado atual.
+
+    Retorna
+    -------
+    (tentativa_atual, limite_atingido)
+        tentativa_atual : int  — número da tentativa após o incremento (-1 se indisponível)
+        limite_atingido : bool — True se o limite foi atingido e a rotina foi inativada
     """
+    # Import tardio para evitar importação circular (_database importa _utils)
+    from ._database import DB
+
     logger = get_logger()
     db = DB()
+
     if db.consultar(getenv("SQL_ATTEMPT_ERROR"), [id_rotina])['data']:
         db.executar(getenv("SQL_UPDATE_RESET_TENT_ERRO"), [id_rotina])
-        logger.info(f"---[ Rotina {id_rotina} inativada ]---")
-        return True
+        logger.info(f"---[ Rotina {id_rotina} inativada após atingir limite de tentativas ]---")
+        return (-1, True)
 
     db.executar(getenv("SQL_UPDATE_TENT_ERRO"), [id_rotina])
-    return None
+
+    rows = db.consultar(getenv("SQL_GET_TENT_ERRO"), [id_rotina])['data']
+    tentativa_atual = rows[0][0] if rows else -1
+
+    return (tentativa_atual, False)
 
 
-def notify_error(err: Exception | str, routine: RoutineData | str) -> None:
-    """Envia um alerta por e-mail com os detalhes técnicos da falha."""
+def notify_error(err: Exception | str, routine: "RoutineData | str") -> None:
+    """
+    Envia um e-mail de alerta com os detalhes técnicos da falha.
+    Deve ser chamado apenas quando todas as tentativas forem esgotadas.
+    """
+    # Import tardio para evitar importação circular (_emails importa _utils)
+    from ._emails import Email
+
     logger = get_logger()
 
     detalhes_erro = (
@@ -129,36 +143,31 @@ def notify_error(err: Exception | str, routine: RoutineData | str) -> None:
         if isinstance(err, Exception) else str(err)
     )
 
-    if not isinstance(routine, RoutineData):
-        nome = routine
-        id_rotina = 0
-    else:
-        nome = routine.nome
-        id_rotina = routine.id
+    nome = routine.nome if isinstance(routine, RoutineData) else routine
 
-    if attempt_error(id_rotina):
-        corpo = (
-            f"⚠️ ALERTA DE FALHA EM ROTINA\n"
-            f"------------------------------------------\n"
-            f"Rotina: {nome}\n"
-            f"Data/Hora: {dt.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-            f"\nDetalhes Técnicos:\n"
-            f"{detalhes_erro}\n"
-            f"------------------------------------------\n"
-            f"Favor verificar o servidor de automações. "
-            f"Rotina inativada, limite de tentativas atingido."
-        )
-        try:
-            Email(
-                para=getenv("EMAIL_RECIPIENTS_ERROR").split(";"),
-                titulo=f"🚨 ERRO CRÍTICO: {nome}",
-                corpo_texto=corpo
-            ).enviar()
-            logger.warning(f"Notificação de erro enviada para a rotina: {nome}")
-        except Exception as e:
-            logger.critical(f"Falha ao enviar e-mail de notificação de erro: {e}", exc_info=True)
+    corpo = (
+        f"⚠️ ALERTA DE FALHA EM ROTINA\n"
+        f"------------------------------------------\n"
+        f"Rotina: {nome}\n"
+        f"Data/Hora: {dt.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"\nDetalhes Técnicos:\n"
+        f"{detalhes_erro}\n"
+        f"------------------------------------------\n"
+        f"Favor verificar o servidor de automações. "
+        f"Rotina inativada, limite de tentativas atingido."
+    )
 
-    
+    try:
+        Email(
+            para=getenv("EMAIL_RECIPIENTS_ERROR").split(";"),
+            titulo=f"🚨 ERRO CRÍTICO: {nome}",
+            corpo_texto=corpo
+        ).enviar()
+        logger.warning(f"Notificação de erro enviada para a rotina: {nome}")
+    except Exception as e:
+        logger.critical(f"Falha ao enviar e-mail de notificação de erro: {e}", exc_info=True)
+
+
 def create_essential_folders():
     log_dir = base_path / "logs"
     log_dir.mkdir(exist_ok=True)

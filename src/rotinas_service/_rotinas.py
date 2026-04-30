@@ -1,6 +1,10 @@
-from ._database import InterfaceError, DB
+from ._database import DB, InterfaceError
 from ._emails import Email
-from ._utils import notify_error, check_and_update_log_file, RoutineData, convert_word_to_html, get_logger
+from ._utils import (
+    notify_error, attempt_error, check_and_update_log_file,
+    RoutineData, convert_word_to_html, get_logger
+)
+
 
 from datetime import datetime as dt
 from pathlib import Path
@@ -15,17 +19,25 @@ from time import sleep
 try:
     from openpyxl import Workbook
     from apscheduler.schedulers.blocking import BlockingScheduler
-    from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     get_logger().error(f"Dependência faltando: {e}")
 
 
 # Intervalo (segundos) em que o serviço verifica novas rotinas ou alterações no banco
-_SYNC_INTERVAL = 10
+_SYNC_INTERVAL = 5
 
 
 class RoutineService:
+
+    # Número máximo de tentativas por execução antes de contabilizar erro acumulado.
+    # Deve ser igual ao limite configurado na query SQL_ATTEMPT_ERROR.
+    _MAX_RETRIES = 5
+
+    # Tempo base de espera (segundos) entre tentativas — cresce linearmente.
+    # Tentativa 1→2: 10s | 2→3: 20s | 3→4: 30s | 4→5: 40s
+    _RETRY_BACKOFF = 10
+
     def __init__(self):
         super().__init__()
         self.db = DB()
@@ -34,9 +46,9 @@ class RoutineService:
         self.lock_handle = None
         self.scheduler: BlockingScheduler | None = None
 
-        # Mantém o estado dos jobs registrados: {id_rotina: intervalo_segundos}
-        # Usado pelo sync para detectar rotinas novas ou alteradas sem recriar tudo.
-        self._registered: dict[int, int] = {}
+        # Mantém o estado dos jobs registrados: {id_rotina: (intervalo_segundos, dta_proxima)}
+        # Usado pelo sync para detectar mudanças de intervalo OU de dta_proxima no banco.
+        self._registered: dict[int, tuple[int | None, dt | None]] = {}
 
         register(self.release_lock)
 
@@ -96,7 +108,7 @@ class RoutineService:
         logger.info("Serviço de Rotinas Iniciado...")
         try:
             self.scheduler.start()
-        except (KeyboardInterrupt, SystemExit, InterfaceError):
+        except (KeyboardInterrupt, SystemExit):
             logger.info("Serviço finalizado pelo usuário ou erro de interface.")
         finally:
             self.release_lock()
@@ -139,14 +151,25 @@ class RoutineService:
         # Adiciona ou atualiza jobs
         for rid, routine in rotinas_ativas.items():
             intervalo_atual = self._intervalo_segundos(routine)
+            dta_atual = routine.dta_proxima or routine.dta_inicial
 
             if rid not in self._registered:
                 self._add_job(routine)
-            elif self._registered[rid] != intervalo_atual:
-                # Intervalo foi alterado no banco — recria o job com o novo trigger
-                logger.info(f"Intervalo alterado para rotina '{routine.nome}' (ID: {rid}). Reagendando.")
-                self._remove_job(rid)
-                self._add_job(routine)
+
+            else:
+                intervalo_reg, dta_reg = self._registered[rid]
+
+                if intervalo_reg != intervalo_atual:
+                    # Intervalo mudou — recria o job com trigger completamente novo
+                    logger.info(f"Intervalo alterado para rotina '{routine.nome}' (ID: {rid}). Reagendando.")
+                    self._remove_job(rid)
+                    self._add_job(routine)
+
+                elif dta_reg != dta_atual:
+                    # Apenas dta_proxima foi alterada externamente no banco —
+                    # atualiza somente o start_date do trigger sem recriar o job
+                    self._reschedule_trigger(routine)
+                    self._registered[rid] = (intervalo_atual, dta_atual)
 
     def _intervalo_segundos(self, routine: RoutineData) -> int | None:
         """Converte período + intervalo da rotina para segundos (usado como chave de comparação)."""
@@ -162,7 +185,7 @@ class RoutineService:
             'Mi': {'minutes':  routine.intervalo},
             'H':  {'hours':    routine.intervalo},
             'D':  {'days':     routine.intervalo},
-            'M':  {'weeks':    routine.intervalo * 4},
+            'M':  {'weeks':    routine.intervalo},
         }
         params = kwargs.get(routine.periodo, {'minutes': routine.intervalo or 1})
 
@@ -191,10 +214,34 @@ class RoutineService:
                 coalesce=True,
                 replace_existing=True,
             )
-            self._registered[routine.id] = self._intervalo_segundos(routine)
+            self._registered[routine.id] = (
+                self._intervalo_segundos(routine),
+                routine.dta_proxima or routine.dta_inicial,
+            )
             logger.info(f"Job registrado: '{routine.nome}' (ID: {routine.id}) | intervalo: {routine.intervalo}{routine.periodo}")
         except Exception as e:
             logger.error(f"Erro ao registrar job da rotina {routine.id}: {e}")
+
+    def _reschedule_trigger(self, routine: RoutineData):
+        """
+        Atualiza apenas o start_date do trigger do job existente quando
+        dta_proxima foi alterada externamente no banco.
+        O job não é removido nem recriado — só o próximo disparo é movido.
+        """
+        logger = get_logger()
+        try:
+            nova_data = routine.dta_proxima or routine.dta_inicial
+            novo_trigger = self._make_trigger(routine)
+            self.scheduler.reschedule_job(
+                self._job_id(routine.id),
+                trigger=novo_trigger,
+            )
+            logger.info(
+                f"dta_proxima alterada externamente: '{routine.nome}' (ID: {routine.id}) "
+                f"— próxima execução: {nova_data}"
+            )
+        except Exception as e:
+            logger.error(f"Erro ao atualizar trigger da rotina {routine.id}: {e}")
 
     def _remove_job(self, routine_id: int):
         """Remove um job do scheduler e do registro interno."""
@@ -203,53 +250,77 @@ class RoutineService:
             self.scheduler.remove_job(self._job_id(routine_id))
             logger.info(f"Job removido: rotina ID {routine_id}")
         except Exception:
-            pass
+            raise Exception(f'Erro ao remover a rotina {routine_id}')
         self._registered.pop(routine_id, None)
 
     # ------------------------------------------------------------------
-    # Execução de rotina
+    # Execução de rotina com retry
     # ------------------------------------------------------------------
 
     def process_routine(self, routine: RoutineData):
-        """Ponto de entrada de cada job. Roda em thread própria do APScheduler."""
+        """
+        Ponto de entrada de cada job. Executa a rotina com até _MAX_RETRIES
+        tentativas em caso de falha, com backoff linear entre elas.
+        Ao esgotar as tentativas, incrementa o contador acumulado no banco e,
+        se o limite for atingido, inativa a rotina e envia notificação por e-mail.
+        """
         logger = get_logger()
-        try:
-            logger.info(f"Iniciando: '{routine.nome}' (ID: {routine.id})")
+        ultimo_erro: Exception | None = None
 
-            self.db.executar(getenv("SQL_UPDATE_SET_TO_EXECUTE"), [routine.id])
+        for tentativa in range(1, self._MAX_RETRIES + 1):
+            try:
+                if tentativa > 1:
+                    espera = (tentativa - 1) * self._RETRY_BACKOFF
+                    logger.warning(
+                        f"Tentativa {tentativa}/{self._MAX_RETRIES} para "
+                        f"'{routine.nome}' (ID: {routine.id}) — aguardando {espera}s..."
+                    )
+                    sleep(espera)
 
-            if routine.tipo == 'RE':
-                self._handle_report(routine)
-            elif routine.tipo == 'IN':
-                self._handle_info(routine)
-            elif routine.tipo == 'TRG':
-                self._handle_trigger(routine)
-            elif routine.tipo == 'JOB':
-                self._handle_job(routine)
+                logger.info(f"Iniciando: '{routine.nome}' (ID: {routine.id})")
 
-            self.db.executar(getenv("SQL_UPDATE_SET_TO_FINISHED"), [routine.id])
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_EXECUTE"), [routine.id])
 
-            # Atualiza dta_proxima no banco para todos os tipos exceto JOB
-            if routine.tipo != 'JOB':
-                self._reschedule(routine)
+                if routine.tipo == 'RE':
+                    self._handle_report(routine)
+                elif routine.tipo == 'IN':
+                    self._handle_info(routine)
+                elif routine.tipo == 'TRG':
+                    self._handle_trigger(routine)
+                elif routine.tipo == 'JOB':
+                    self._handle_job(routine)
 
-            # Recarrega o objeto da rotina no job com os dados mais recentes do banco
-            self._refresh_job(routine)
+                self.db.executar(getenv("SQL_UPDATE_SET_TO_FINISHED"), [routine.id])
 
-            logger.info(f"Sucesso: '{routine.nome}' (ID: {routine.id})")
+                # Atualiza dta_proxima no banco para todos os tipos exceto JOB
+                if routine.tipo != 'JOB':
+                    self._reschedule(routine)
 
-        except Exception as e:
-            logger.error(f"Falha na rotina {routine.id} '{routine.nome}': {e}")
-            self.db.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
-            notify_error(e, routine)
+                # Recarrega o objeto da rotina no job com os dados mais recentes
+                self._refresh_job(routine)
+
+                logger.info(f"Sucesso: '{routine.nome}' (ID: {routine.id})")
+                return  # Saída limpa — não executa o bloco de erro abaixo
+
+            except Exception as e:
+                ultimo_erro = e
+                logger.error(
+                    f"Falha [{tentativa}/{self._MAX_RETRIES}] na rotina "
+                    f"'{routine.nome}' (ID: {routine.id}): {e}"
+                )
+                self.db.executar(getenv("SQL_UPDATE_SET_STATUS_TO_NULL"), [routine.id])
+
+        # Todas as tentativas falharam — incrementa contador acumulado no banco
+        # e notifica apenas se o limite total de erros for atingido
+        _tentativa_banco, limite_atingido = attempt_error(routine.id)
+        if limite_atingido:
+            notify_error(ultimo_erro, routine)
 
     def _reschedule(self, routine: RoutineData):
         """
         Calcula e grava a próxima data de execução no banco.
         Chamado após toda execução bem-sucedida, exceto para rotinas do tipo JOB.
-
-        Para período 'U' (único) ou quando dta_final foi atingida, desativa a rotina
-        e remove o job do scheduler.
+        Para período 'U' ou quando dta_final é atingida, desativa a rotina.
         """
         logger = get_logger()
         agora = dt.now()
@@ -258,7 +329,7 @@ class RoutineService:
             if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
                 self.db.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
                 self._remove_job(routine.id)
-                logger.info(f"Rotina '{routine.nome}' (ID: {routine.id}) desativada após execução única/final.")
+                logger.info(f"Rotina '{routine.nome}' (ID: {routine.id}) inativada após execução única/final.")
                 return
 
             sql_map = {
@@ -271,9 +342,7 @@ class RoutineService:
 
             sql_update = sql_map.get(routine.periodo)
             if sql_update:
-                # Usa dta_proxima (ou dta_inicial) como base do cálculo para que
-                # atrasos na execução não acumulem deriva no agendamento.
-                base = agora.replace(second=0, microsecond=0) #  routine.dta_proxima or routine.dta_inicial
+                base = agora.replace(second=0, microsecond=0)
                 self.db.executar(sql_update, [base, routine.intervalo, routine.id])
                 logger.info(f"dta_proxima atualizada: '{routine.nome}' (ID: {routine.id})")
             else:
@@ -288,7 +357,8 @@ class RoutineService:
         """
         Recarrega os dados da rotina do banco e atualiza o argumento do job,
         garantindo que dta_proxima e outros campos reflitam o estado atual
-        sem precisar remover e recriar o job.
+        sem precisar remover e recriar o job. Também sincroniza _registered
+        para que o próximo sync não reaja à mudança que o próprio serviço fez.
         """
         try:
             rows = self.db.consultar(getenv("SQL_GET_ROUTINE_BY_ID"), [routine.id])['data']
@@ -297,6 +367,10 @@ class RoutineService:
                 job = self.scheduler.get_job(self._job_id(routine.id))
                 if job:
                     job.modify(args=[routine_atualizada])
+                    self._registered[routine.id] = (
+                        self._intervalo_segundos(routine_atualizada),
+                        routine_atualizada.dta_proxima or routine_atualizada.dta_inicial,
+                    )
         except Exception as e:
             get_logger().warning(f"Não foi possível atualizar o job da rotina {routine.id}: {e}")
 
@@ -370,12 +444,10 @@ class RoutineService:
         folder = self.base_path / "planilhas"
         folder.mkdir(exist_ok=True)
 
-
-
         clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
         clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
 
-        file_path = folder / f"{clean_name}.xlsx"
+        file_path = folder / f"{clean_name}xlsx"
         wb.save(file_path)
         return file_path
 
@@ -424,13 +496,28 @@ class RoutineService:
             raise Exception(f"Erro ao processar relatório '{routine.nome}': {e}") from e
 
     def _handle_trigger(self, routine: RoutineData):
+        """
+        Executa a query da rotina e, se retornar dados, gera e envia o relatório.
+        Útil para relatórios condicionais: só envia quando há registros relevantes.
+        Reutiliza o result já consultado para não fazer duas chamadas ao banco.
+        """
         try:
             result = self.db.consultar(routine.sql)
-            if not result['data'] == []:
-                self._handle_report(routine)
+            if not result['data']:
+                return
 
+            path_excel = self._create_excel(result, routine)
+            destinatarios = self._get_recipient(routine.id)
+            Email(
+                para=destinatarios,
+                titulo=f"Relatório - {routine.nome}",
+                corpo_texto="Segue em anexo o relatório solicitado."
+                            "\n\nEste é um e-mail automático, favor não responder."
+                            "\n\nAtenciosamente, Departamento de TI.",
+                anexos=[str(path_excel)]
+            ).enviar()
         except Exception as e:
-            raise Exception(f"Erro ao processar trigger '{routine.nome}': {e} ") from e
+            raise Exception(f"Erro ao processar trigger '{routine.nome}': {e}") from e
 
     def _handle_job(self, routine: RoutineData):
         try:
