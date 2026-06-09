@@ -2,7 +2,8 @@
 
 import logging
 import traceback
-from datetime import datetime as dt
+from datetime import datetime as dt, timedelta
+from logging.handlers import BaseRotatingHandler
 from os import getenv
 from pathlib import Path
 from dataclasses import dataclass
@@ -11,6 +12,78 @@ from typing import Optional
 from mammoth import convert_to_html
 
 base_path = Path.cwd()
+
+# Tamanho máximo de cada arquivo de log antes de rotacionar (5 MB)
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+# Quantidade de dias que os arquivos de log são mantidos
+_LOG_RETENTION_DAYS = 35
+
+
+class _MonthlyRotatingFileHandler(BaseRotatingHandler):
+    """
+    Handler que combina duas políticas de rotação:
+      - Por virada de mês: abre um novo arquivo base (service_YYYY-MM.log)
+      - Por tamanho: quando o arquivo atual ultrapassa _LOG_MAX_BYTES,
+        cria um sufixo incremental (service_YYYY-MM_01.log, _02.log, ...)
+
+    Nomenclatura resultante:
+        logs/service_2026-06.log
+        logs/service_2026-06_01.log   <- primeiro overflow do mês
+        logs/service_2026-06_02.log   <- segundo overflow, etc.
+    """
+
+    def __init__(self, log_dir: Path, encoding: str = "utf-8"):
+        self.log_dir = log_dir
+        self._current_month = dt.now().strftime("%Y-%m")
+        filename = self._resolve_path()
+        super().__init__(filename, mode="a", encoding=encoding)
+
+    def _resolve_path(self) -> str:
+        """
+        Retorna o caminho do arquivo de log atual.
+        Se o arquivo base do mês já estiver cheio, incrementa o sufixo.
+        """
+        base = self.log_dir / f"service_{self._current_month}.log"
+        if not base.exists() or base.stat().st_size < _LOG_MAX_BYTES:
+            return str(base)
+
+        index = 1
+        while True:
+            candidate = self.log_dir / f"service_{self._current_month}_{index:02d}.log"
+            if not candidate.exists() or candidate.stat().st_size < _LOG_MAX_BYTES:
+                return str(candidate)
+            index += 1
+
+    def shouldRollover(self, record) -> bool:
+        month_changed = dt.now().strftime("%Y-%m") != self._current_month
+        size_exceeded = self.stream and self.stream.tell() >= _LOG_MAX_BYTES
+        return month_changed or size_exceeded
+
+    def doRollover(self):
+        if self.stream:
+            self.stream.close()
+            self.stream = None  # type: ignore[assignment]
+
+        self._current_month = dt.now().strftime("%Y-%m")
+        self.baseFilename = self._resolve_path()
+        self.stream = self._open()
+
+    def _open(self):
+        Path(self.baseFilename).parent.mkdir(parents=True, exist_ok=True)
+        return open(self.baseFilename, self.mode, encoding=self.encoding)
+
+
+def _purge_old_logs(log_dir: Path):
+    """Remove arquivos de log mais antigos que _LOG_RETENTION_DAYS dias."""
+    limite = dt.now() - timedelta(days=_LOG_RETENTION_DAYS)
+    for arq in log_dir.glob("service_*.log"):
+        try:
+            if dt.fromtimestamp(arq.stat().st_mtime) < limite:
+                arq.unlink()
+                logging.getLogger("app").info(f"Log antigo removido: {arq.name}")
+        except Exception:
+            pass
 
 
 @dataclass
@@ -38,40 +111,37 @@ class RoutineData:
         )
 
 
-def setup_logging(log_file, level: int = logging.INFO):
+def setup_logging(log_dir: Path, level: int = logging.INFO):
     """
-    Configura o logging exclusivamente para a aplicação.
-
-    Bibliotecas de terceiros (apscheduler, oracledb, mammoth, etc.) são
-    silenciadas — apenas erros críticos delas aparecem nos logs.
+    Configura o logging da aplicação com:
+      - Rotação automática por tamanho (5 MB) e virada de mês
+      - Sub-logger 'app.job' em WARNING — JOBs só aparecem em erro/alteração
+      - Bibliotecas de terceiros silenciadas (nível WARNING no root)
 
     Parâmetros
     ----------
-    log_file : str | Path
-        Caminho do arquivo de log.
+    log_dir : Path
+        Diretório onde os arquivos de log serão criados.
     level : int
-        Nível de log da aplicação. Exemplos:
-          - logging.INFO    -> informações gerais (padrão)
-          - logging.WARNING -> apenas avisos e erros
-          - logging.ERROR   -> apenas erros
+        Nível de log geral da aplicação (padrão: INFO).
     """
     fmt = logging.Formatter(
         fmt='%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Logger raiz em WARNING para silenciar bibliotecas de terceiros
+    # Logger raiz em WARNING — silencia bibliotecas de terceiros
     root = logging.getLogger()
     root.setLevel(logging.WARNING)
     root.handlers.clear()
 
-    # Logger dedicado à aplicação
+    # Logger principal da aplicação
     app_logger = logging.getLogger("app")
     app_logger.setLevel(level)
-    app_logger.propagate = False  # Não repassa ao root — evita duplicidade
+    app_logger.propagate = False
     app_logger.handlers.clear()
 
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler = _MonthlyRotatingFileHandler(log_dir)
     file_handler.setFormatter(fmt)
 
     console_handler = logging.StreamHandler()
@@ -80,23 +150,45 @@ def setup_logging(log_file, level: int = logging.INFO):
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
 
+    # Sub-logger para rotinas do tipo JOB:
+    # herda os handlers do pai mas só registra WARNING e acima,
+    # suprimindo os INFO de "Iniciando" e "Sucesso" a cada execução.
+    job_logger = logging.getLogger("app.job")
+    job_logger.setLevel(logging.WARNING)
+    job_logger.propagate = True  # usa os handlers do app_logger
+
     app_logger.info("--- [ Sistema de logs inicializado ] ---")
 
+    # Limpeza de logs antigos a cada inicialização
+    _purge_old_logs(log_dir)
 
-def get_logger() -> logging.Logger:
-    """Retorna o logger da aplicação. Use em todos os módulos no lugar de logging.*"""
+
+def get_logger(tipo: str | None = None) -> logging.Logger:
+    """
+    Retorna o logger da aplicação.
+
+    Parâmetros
+    ----------
+    tipo : str | None
+        Tipo da rotina. Passe 'JOB' para obter o sub-logger silencioso
+        que suprime mensagens INFO de execuções normais.
+    """
+    if tipo == 'JOB':
+        return logging.getLogger("app.job")
     return logging.getLogger("app")
 
 
 def check_and_update_log_file():
     log_dir = base_path / "logs"
     log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / f"service_{dt.now().strftime('%Y-%m')}.log"
 
     app_logger = get_logger()
-    if not log_file.exists() or not app_logger.hasHandlers():
-        app_logger.info(f"Configurando novo arquivo de log: {log_file.name}")
-        setup_logging(log_file)
+
+    # Reconfigura apenas na primeira execução (sem handlers).
+    # A rotação por virada de mês e por tamanho é tratada automaticamente
+    # pelo _MonthlyRotatingFileHandler a cada linha escrita.
+    if not app_logger.hasHandlers():
+        setup_logging(log_dir)
 
 
 def attempt_error(id_rotina: int) -> tuple[int, bool]:
@@ -109,7 +201,6 @@ def attempt_error(id_rotina: int) -> tuple[int, bool]:
         tentativa_atual : int  — número da tentativa após o incremento (-1 se indisponível)
         limite_atingido : bool — True se o limite foi atingido e a rotina foi inativada
     """
-    # Import tardio para evitar importação circular (_database importa _utils)
     from ._database import DB
 
     logger = get_logger()
@@ -133,7 +224,6 @@ def notify_error(err: Exception | str, routine: "RoutineData | str") -> None:
     Envia um e-mail de alerta com os detalhes técnicos da falha.
     Deve ser chamado apenas quando todas as tentativas forem esgotadas.
     """
-    # Import tardio para evitar importação circular (_emails importa _utils)
     from ._emails import Email
 
     logger = get_logger()

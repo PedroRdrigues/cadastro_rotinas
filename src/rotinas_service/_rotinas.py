@@ -1,4 +1,4 @@
-from ._database import DB, InterfaceError
+from ._database import DB
 from ._emails import Email
 from ._utils import (
     notify_error, attempt_error, check_and_update_log_file,
@@ -25,7 +25,7 @@ except ImportError as e:
 
 
 # Intervalo (segundos) em que o serviço verifica novas rotinas ou alterações no banco
-_SYNC_INTERVAL = 5
+_SYNC_INTERVAL = 10
 
 
 class RoutineService:
@@ -185,7 +185,7 @@ class RoutineService:
             'Mi': {'minutes':  routine.intervalo},
             'H':  {'hours':    routine.intervalo},
             'D':  {'days':     routine.intervalo},
-            'M':  {'weeks':    routine.intervalo},
+            'M':  {'weeks':    routine.intervalo * 4},
         }
         params = kwargs.get(routine.periodo, {'minutes': routine.intervalo or 1})
 
@@ -250,7 +250,7 @@ class RoutineService:
             self.scheduler.remove_job(self._job_id(routine_id))
             logger.info(f"Job removido: rotina ID {routine_id}")
         except Exception:
-            raise Exception(f'Erro ao remover a rotina {routine_id}')
+            pass
         self._registered.pop(routine_id, None)
 
     # ------------------------------------------------------------------
@@ -261,10 +261,10 @@ class RoutineService:
         """
         Ponto de entrada de cada job. Executa a rotina com até _MAX_RETRIES
         tentativas em caso de falha, com backoff linear entre elas.
-        Ao esgotar as tentativas, incrementa o contador acumulado no banco e,
-        se o limite for atingido, inativa a rotina e envia notificação por e-mail.
+        Rotinas do tipo JOB usam o sub-logger 'app.job' (nível WARNING),
+        suprimindo mensagens INFO de execuções normais.
         """
-        logger = get_logger()
+        logger = get_logger(routine.tipo)
         ultimo_erro: Exception | None = None
 
         for tentativa in range(1, self._MAX_RETRIES + 1):
@@ -329,7 +329,7 @@ class RoutineService:
             if routine.periodo == 'U' or (routine.dta_final and routine.dta_final <= agora):
                 self.db.executar(getenv("SQL_UPDATE_DISABLE_ROUTINE"), [routine.id])
                 self._remove_job(routine.id)
-                logger.info(f"Rotina '{routine.nome}' (ID: {routine.id}) inativada após execução única/final.")
+                logger.info(f"Rotina '{routine.nome}' (ID: {routine.id}) desativada após execução única/final.")
                 return
 
             sql_map = {
@@ -367,10 +367,12 @@ class RoutineService:
                 job = self.scheduler.get_job(self._job_id(routine.id))
                 if job:
                     job.modify(args=[routine_atualizada])
-                    self._registered[routine.id] = (
-                        self._intervalo_segundos(routine_atualizada),
-                        routine_atualizada.dta_proxima or routine_atualizada.dta_inicial,
-                    )
+                # Atualiza _registered com a nova dta_proxima para que o sync
+                # não a confunda com uma alteração externa no banco
+                self._registered[routine.id] = (
+                    self._intervalo_segundos(routine_atualizada),
+                    routine_atualizada.dta_proxima or routine_atualizada.dta_inicial,
+                )
         except Exception as e:
             get_logger().warning(f"Não foi possível atualizar o job da rotina {routine.id}: {e}")
 
@@ -447,7 +449,7 @@ class RoutineService:
         clean_name = normalize('NFD', routine.nome.lower().replace(' ', '_'))
         clean_name = "".join(c for c in clean_name if category(c) != 'Mn')
 
-        file_path = folder / f"{clean_name}xlsx"
+        file_path = folder / f"{clean_name}.xlsx"
         wb.save(file_path)
         return file_path
 
@@ -499,23 +501,12 @@ class RoutineService:
         """
         Executa a query da rotina e, se retornar dados, gera e envia o relatório.
         Útil para relatórios condicionais: só envia quando há registros relevantes.
-        Reutiliza o result já consultado para não fazer duas chamadas ao banco.
         """
         try:
             result = self.db.consultar(routine.sql)
-            if not result['data']:
-                return
+            if result['data']:
+                self._handle_report(routine)
 
-            path_excel = self._create_excel(result, routine)
-            destinatarios = self._get_recipient(routine.id)
-            Email(
-                para=destinatarios,
-                titulo=f"Relatório - {routine.nome}",
-                corpo_texto="Segue em anexo o relatório solicitado."
-                            "\n\nEste é um e-mail automático, favor não responder."
-                            "\n\nAtenciosamente, Departamento de TI.",
-                anexos=[str(path_excel)]
-            ).enviar()
         except Exception as e:
             raise Exception(f"Erro ao processar trigger '{routine.nome}': {e}") from e
 
